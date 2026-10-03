@@ -9,6 +9,7 @@ transformers = pytest.importorskip("transformers")
 
 from spec.extract_hidden import (  # noqa: E402
     common_prefix_len,
+    encode,
     extract_game,
     group_by_turn,
     turn_hidden,
@@ -121,3 +122,18 @@ def test_extract_game_layout() -> None:
     p0 = samples[0]["prefix_len"]
     assert p0 >= len("<system>shared state 0<user>")
     assert stats["tokens_stored"] < stats["tokens_total"]
+
+
+def test_encode_prefers_server_ids() -> None:
+    tok = CharTokenizer()
+    row = _row(0, "faction", 0, "you are 0", "ab")
+    retok = encode(tok, row, STOP)
+    assert retok.ids[-3:] == [ord("a") % (VOCAB - 1), ord("b") % (VOCAB - 1), STOP]
+
+    # Server sampled "ab" as one non-canonical token (5) and its prompt as the canonical ids.
+    prompt = retok.ids[: retok.completion_start]
+    server = row | {"prompt_token_ids": prompt, "token_ids": [5, STOP]}
+    e = encode(tok, server, STOP)
+    assert e.ids == [*prompt, 5, STOP]
+    assert e.completion_start == len(prompt)
+    assert e.prompt_matches is True and e.completion_matches is False

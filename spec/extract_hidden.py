@@ -56,10 +56,12 @@ def usable(row: dict[str, Any]) -> bool:
 
 
 def encode(tokenizer: Any, row: dict[str, Any], stop_id: int) -> Encoded:
-    """Token ids as the server saw them: chat template + completion (+ stop token if it stopped).
+    """Token ids as the server saw and sampled them.
 
-    The completion is re-tokenized from text, which can differ from the sampled ids when the
-    model emitted a non-canonical split; the length check against the server's count flags it.
+    Rows collected with `return_token_ids` carry the server's ids, which are used as is. Older
+    rows are re-tokenized (chat template + completion text + stop token if it stopped), which
+    differs from the sampled ids wherever the target emitted a non-canonical split. Either way the
+    `*_matches` flags record whether re-tokenizing reproduces what the server had.
     """
     text = tokenizer.apply_chat_template(
         row["messages"], tokenize=False, add_generation_prompt=True
@@ -68,6 +70,15 @@ def encode(tokenizer: Any, row: dict[str, Any], stop_id: int) -> Encoded:
     completion = tokenizer(row["completion"], add_special_tokens=False)["input_ids"]
     if row["finish_reason"] == "stop":
         completion = [*completion, stop_id]
+    server_prompt, server_completion = row.get("prompt_token_ids"), row.get("token_ids")
+    if server_prompt is not None and server_completion is not None:
+        return Encoded(
+            row=row,
+            ids=server_prompt + server_completion,
+            completion_start=len(server_prompt),
+            prompt_matches=prompt == server_prompt,
+            completion_matches=completion == server_completion,
+        )
     pt, ct = row["prompt_tokens"], row["completion_tokens"]
     return Encoded(
         row=row,

@@ -3,10 +3,11 @@
     uv run python -m spec.collect configs/collect/<name>.yaml [--out DIR] [--dry-run]
 
 Each game is written to games/n<factions>_s<seed>.jsonl, one row per request (faction decisions
-and narrator), holding the exact chat messages sent and the completion text. A game file appears
-only once the game finishes, so rerunning with --out on an interrupted run skips finished games.
-Token ids are not logged: extract_hidden.py applies the chat template and tokenizes, and checks
-the completion token count against the server's `completion_tokens`.
+and narrator), holding the exact chat messages sent, the completion text, and the token ids the
+server saw and sampled (vLLM `return_token_ids`). The sampled ids matter: under guided decoding
+the target emits non-canonical splits (e.g. `"},"` as two tokens), so re-tokenizing the text is
+not exact. A game file appears only once the game finishes, so rerunning with --out on an
+interrupted run skips finished games.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from bench.client import ChatClient, Completion, Message, OpenAIChatClient
+from bench.client import ChatClient, ChatRequest, Completion, Message, OpenAIChatClient
 from bench.config import REPO_ROOT as SERVING_ROOT
 from bench.config import ModelConfig, ServerConfig, load_model_config, pinned_image
 from bench.server import VLLMServer, parse_startup_log, vllm_args
@@ -83,6 +84,8 @@ class Sample(BaseModel):
     valid_json: bool | None  # None for narrator
     legal: bool | None  # None for narrator; set once the turn resolves
     error: str | None
+    prompt_token_ids: list[int] | None  # chat template applied by the server
+    token_ids: list[int] | None  # sampled completion ids, including the stop token
 
 
 def _resolve_serving_path(path: str) -> Path:
@@ -99,6 +102,20 @@ def load_collect_config(path: Path) -> CollectConfig:
     if cfg.agent.narrator == "pipelined":
         raise ValueError("use narrator: sequential or off; pipelined narration lags history")
     return cfg
+
+
+class TokenIdClient:
+    """Asks the server for prompt and sampled token ids on every request."""
+
+    def __init__(self, inner: ChatClient) -> None:
+        self.inner = inner
+
+    async def chat(
+        self, request: ChatRequest, on_token: Callable[[str], None] | None = None
+    ) -> Completion:
+        return await self.inner.chat(
+            request.model_copy(update={"return_token_ids": True}), on_token
+        )
 
 
 class RecordingAgents(Agents):
@@ -137,6 +154,8 @@ class RecordingAgents(Agents):
             valid_json=valid_json,
             legal=None,
             error=c.error,
+            prompt_token_ids=c.prompt_token_ids,
+            token_ids=c.token_ids,
         )
 
     async def decide(self, fid: int, messages: list[Message], seed: int) -> Decision:
@@ -276,13 +295,14 @@ def main(argv: list[str] | None = None) -> int:
         }
         # One env file per session, so a resumed run keeps the record of each server it used.
         (out / f"env-{stamp}.json").write_text(json.dumps(env, indent=2), encoding="utf-8")
-        client = OpenAIChatClient(cfg.server.base_url, model.model, cfg.run.request_timeout_s)
+        http = OpenAIChatClient(cfg.server.base_url, model.model, cfg.run.request_timeout_s)
+        client = TokenIdClient(http)
 
         async def run() -> dict[str, int]:
             try:
                 return await collect(cfg, game_cfg, client, out)
             finally:
-                await client.aclose()
+                await http.aclose()
 
         try:
             totals = asyncio.run(run())

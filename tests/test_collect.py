@@ -15,6 +15,7 @@ from spec.collect import (
     REPO_ROOT,
     CollectConfig,
     Sample,
+    TokenIdClient,
     collect,
     game_path,
     load_collect_config,
@@ -44,6 +45,7 @@ class FakeClient:
             fid = int(match.group(1))
             body = {"action": {"type": "pass"}, "diplomatic_message": f"faction {fid} waits"}
             text = "not json" if fid == 1 else json.dumps(body)
+        ids = request.return_token_ids
         return Completion(
             text=text,
             prompt_tokens=100,
@@ -51,6 +53,8 @@ class FakeClient:
             ttft_s=0.0,
             latency_s=0.0,
             finish_reason="stop",
+            prompt_token_ids=list(range(100)) if ids else None,
+            token_ids=[ord(c) for c in text] if ids else None,
         )
 
 
@@ -116,3 +120,19 @@ def test_collect_writes_games_and_resumes(
     again = asyncio.run(collect(smoke, game_cfg, client, tmp_path))
     assert again["skipped"] == 1 and again["games"] == 0
     assert client.requests == []
+
+
+def test_token_id_client_requests_and_records_ids(
+    smoke: CollectConfig, game_cfg: GameConfig
+) -> None:
+    fake = FakeClient()
+    samples = asyncio.run(play_game(TokenIdClient(fake), game_cfg, smoke.agent, 4, 100, turns=1))
+    assert fake.requests and all(r.return_token_ids for r in fake.requests)
+    for s in samples:
+        assert s.prompt_token_ids == list(range(100))
+        assert s.token_ids == [ord(c) for c in s.completion]
+
+
+def test_ids_absent_without_token_id_client(smoke: CollectConfig, game_cfg: GameConfig) -> None:
+    samples = asyncio.run(play_game(FakeClient(), game_cfg, smoke.agent, 4, 100, turns=1))
+    assert all(s.prompt_token_ids is None and s.token_ids is None for s in samples)
