@@ -33,7 +33,21 @@ becomes compute saturated) and explain why. Every result must be explained by me
 
 - Scaffolded 2026-10-02: pyproject with editable path dep, `spec/` package, dependency test.
 - Target model: **Qwen2.5-1.5B-Instruct bf16** (model matrix dropped in Phase 1; no downloads needed).
-- Next: Phase 2 data collection (`spec/collect.py`).
+- `spec/collect.py` done: `uv run python -m spec.collect configs/collect/<name>.yaml [--out DIR]
+  [--dry-run]` launches the pinned vLLM container and writes
+  `data/collect/<name>/<UTC stamp>/games/n<N>_s<seed>.jsonl` (exact messages + completion per
+  request, faction and narrator), `config.yaml`, `env-<stamp>.json`, `vllm-<stamp>.log`. Finished
+  games are skipped on `--out` resume. Collection seeds start at 100; seeds 0-2 and 1000 are
+  reserved for Phase 4 eval and rejected. Settings match Phase 1 `default` (guided on, T=0.7).
+  Live smoke run OK (2026-10-03).
+- Finding: the narrator sometimes copies an earlier narration **verbatim** from "Recent history"
+  in its prompt (smoke: turn 1 = turn 0; Phase 1 default: 1 of 90). Different seeds, so it is
+  in-context copying, not a seeding bug. Expect n-gram (prompt lookup) speculation to do very well
+  on these; measure the copy rate on the full collection.
+- Finding: guided JSON whitespace varies between replies (compact, 2-space, 4-space indent);
+  the grammar allows it, so it is real entropy for the draft head.
+- Next: full collection (`configs/collect/qwen2.5-1.5b.yaml`, 150 games, ~2 h GPU), then
+  `spec/extract_hidden.py`.
 
 ## Layout (target)
 

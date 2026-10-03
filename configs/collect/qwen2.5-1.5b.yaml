@@ -1,0 +1,37 @@
+name: qwen2.5-1.5b
+description: >
+  Draft-head training data from the Phase 4 target, Qwen2.5-1.5B bf16. Same server and agent
+  settings as statecraft-serving's phase1-1.5b `default` variant (guided decoding on, prefix
+  caching on, sequential narrator, temperature 0.7), so the head learns the distribution it will
+  be served against. Validation holds out games by seed at training time.
+model_config_path: configs/models/qwen2.5-1.5b-instruct-bf16.yaml
+game_config_path: configs/game/default.yaml
+
+server:
+  port: 8000
+  gpu_memory_utilization: 0.8
+  max_model_len: 16384
+  extra_flags: ["--enable-prefix-caching"]
+  startup_timeout_s: 900
+
+agent:
+  faction_max_tokens: 160
+  narrator_max_tokens: 200
+  temperature: 0.7
+  guided_decoding: true
+  faction_priority: null
+  narrator_priority: null
+  narrator: sequential
+
+run:
+  turns: 8
+  request_timeout_s: 600
+  # Phase 1 measured on seeds 0-2 and warmed the server with 1000; Phase 4 reuses them.
+  reserved_seeds: [0, 1, 2, 1000]
+  # ~19k faction + ~1.2k narrator samples (fewer if factions die); ~2 h at Phase 1 turn times.
+  games:
+    - {n_factions: 4, first_seed: 100, n_games: 40}
+    - {n_factions: 8, first_seed: 100, n_games: 40}
+    - {n_factions: 16, first_seed: 100, n_games: 40}
+    - {n_factions: 32, first_seed: 100, n_games: 20}
+    - {n_factions: 64, first_seed: 100, n_games: 10}
