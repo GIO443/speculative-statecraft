@@ -1,0 +1,34 @@
+[project]
+name = "speculative-statecraft"
+version = "0.1.0"
+description = "EAGLE-style draft head trained on statecraft-serving's own outputs, vs generic speculation"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "statecraft-serving",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "ruff>=0.7",
+]
+
+# Must stay editable: bench.config.REPO_ROOT resolves configs/ and docker-compose.yml from the
+# statecraft-serving checkout.
+[tool.uv.sources]
+statecraft-serving = { path = "../statecraft-serving", editable = true }
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

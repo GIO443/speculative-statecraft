@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Run outputs: keep only small summaries, plots and run notes under version control.
+# (Ignore files, not directories, so the negations below can reach nested files.)
+results/**
+!results/**/
+!results/**/summary*.json
+!results/**/seconds_per_turn.*
+!results/**/env.json
+!results/**/config.yaml
+!results/**/*.md
+
+# Training data and checkpoints (large)
+data/
+checkpoints/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
