@@ -249,7 +249,11 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
     (out / "config.yaml").write_text(
         yaml.safe_dump(
-            {"collect": cfg.model_dump(mode="json"), "game": game_cfg.model_dump(mode="json")},
+            {
+                "model": model.model,
+                "collect": cfg.model_dump(mode="json"),
+                "game": game_cfg.model_dump(mode="json"),
+            },
             sort_keys=False,
         ),
         encoding="utf-8",

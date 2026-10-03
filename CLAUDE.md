@@ -46,8 +46,44 @@ becomes compute saturated) and explain why. Every result must be explained by me
   on these; measure the copy rate on the full collection.
 - Finding: guided JSON whitespace varies between replies (compact, 2-space, 4-space indent);
   the grammar allows it, so it is real entropy for the draft head.
-- Next: full collection (`configs/collect/qwen2.5-1.5b.yaml`, 150 games, ~2 h GPU), then
-  `spec/extract_hidden.py`.
+- vLLM v0.30 source check (2026-10-03, read from the pinned image):
+  - No Qwen2-specific EAGLE class. Registered generic drafters: `EagleLlamaForCausalLM`
+    (EAGLE-1: `fc(cat(embed, hidden)) -> Llama decoder layers`, first layer's input_layernorm
+    skipped) and `Eagle3LlamaForCausalLM` / `LlamaForCausalLMEagle3` (EAGLE-3, fc over
+    concatenated aux layers). `EAGLEConfig` names the drafter `Eagle<arch>` from the draft
+    config's `architectures`, so our head ships as a Llama-architecture checkpoint.
+  - Qwen2 implements `SupportsEagle3` (aux hidden states), so EAGLE-3 is also an option.
+  - Draft without its own `embed_tokens` / `lm_head` weights shares the target's (saves VRAM).
+  - Structured outputs + spec decode: `StructuredOutputManager.validate_tokens` trims draft
+    tokens to the grammar-valid prefix, so guided decoding and speculation coexist.
+  - `extract_hidden_states` spec method only writes hidden states into KV cache for KV-transfer
+    connectors; not a practical dump path. Extract with transformers in the trainer container.
+- **Decisions (2026-10-03):** EAGLE-1 head first (EAGLE-3 maybe later as a comparison).
+  Hidden states are stored with per-turn **shared-prefix dedupe**: full sequences are ~80M
+  tokens (~240 GB at 3 KiB/token), too big for disk; the common prefix of a turn is stored once.
+- Full collection running/ran into `data/collect/qwen2.5-1.5b/run1` (resume with
+  `--out data/collect/qwen2.5-1.5b/run1`; log in `data/collect/qwen2.5-1.5b-run1.log`).
+  That run's config.yaml predates the `model` field, so pass `--model` to extract_hidden.
+- `spec/extract_hidden.py` + trainer container written and tested on CPU (prefix reuse matches
+  a full forward). Trainer: `docker compose --profile train run --rm trainer ...` (this repo's
+  compose; image pin tested equal to statecraft-serving's). Shards go to the `spec-data` Docker
+  volume at `/data`, not the OneDrive-synced checkout. Container tests:
+  `docker run --rm -v "${PWD}:/work" -w /work speculative-statecraft-trainer python3 -m pytest tests/container`.
+- Collection run1 done (2026-10-03): 150 games, 19,200 faction + 1,200 narrator samples,
+  0 errors, 188 MB JSONL; 88.3M prompt + 1.17M completion tokens. Faction valid JSON 100%,
+  legal 65.8%. Narrator hit its 200-token cap in 40% (482/1200). Narrator verbatim copies of an
+  earlier narration in its prompt: 31/1200 (2.6%).
+- extract_hidden GPU check (2 x 16-faction games): prompt token counts match vLLM exactly
+  (0/272 mismatches); dedupe stores 127k of 766k tokens (6x), ~195 MB per 16-faction game,
+  ~30 GB estimated for run1; ~11 s per 16-faction game.
+- Finding: **guided decoding produces non-canonical token splits.** Wherever a faction reply
+  contains `"},"` (end of the action object, next key), the tokenizer's canonical encoding is one
+  token but the target under the grammar emitted two (90/800 faction replies, always -1 token).
+  Narrator +1 mismatches are mostly length-capped replies. Re-tokenizing completion text is
+  therefore not exactly what the target sampled. vLLM v0.30 supports `return_token_ids` on chat
+  completions (incl. streaming), which would give the sampled ids directly.
+- Next: decide whether to re-collect with sampled token ids; then run extract_hidden on GPU (`--limit 2` first; check
+  prompt/completion token-count mismatches and stored size), then `spec/draft_head.py`.
 
 ## Layout (target)
 

@@ -1,0 +1,34 @@
+# Trainer service. Never run it while a vLLM server is up: both need the whole GPU.
+#   docker compose --profile train run --rm trainer python -m spec.extract_hidden ...
+# VLLM_IMAGE must equal the pin in ../statecraft-serving/docker-compose.yml (tested).
+
+services:
+  trainer:
+    build:
+      context: .
+      dockerfile: docker/trainer.Dockerfile
+      args:
+        VLLM_IMAGE: vllm/vllm-openai@sha256:8a69ffad015f138d7170c4ddc429e230a3bc1c1719f67e14324749df200a4b90
+    image: speculative-statecraft-trainer
+    profiles: [train]
+    working_dir: /work
+    environment:
+      HF_HUB_OFFLINE: "1"   # weights must already be in hf-cache; never download implicitly
+    volumes:
+      - .:/work
+      - hf-cache:/root/.cache/huggingface
+      # Hidden-state shards are tens of GB: keep them in a Docker volume, out of OneDrive.
+      - spec-data:/data
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  hf-cache:
+    external: true
+  spec-data:
