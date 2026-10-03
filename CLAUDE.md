@@ -82,7 +82,19 @@ becomes compute saturated) and explain why. Every result must be explained by me
   Narrator +1 mismatches are mostly length-capped replies. Re-tokenizing completion text is
   therefore not exactly what the target sampled. vLLM v0.30 supports `return_token_ids` on chat
   completions (incl. streaming), which would give the sampled ids directly.
-- Next: decide whether to re-collect with sampled token ids; then run extract_hidden on GPU (`--limit 2` first; check
+- Decision (2026-10-03): re-collect with sampled token ids. statecraft-serving's client got an
+  opt-in `return_token_ids` (commit 61f241e, off by default); collect.py turns it on, rows carry
+  `prompt_token_ids` / `token_ids` (verified live: counts equal vLLM usage, completions end with
+  `<|im_end|>` 151645), and extract_hidden uses them. **run2** (`data/collect/qwen2.5-1.5b/run2`)
+  supersedes run1 for training; run1 is kept only as the record of the tokenization finding.
+- run2 done: 150 games, 20,400 samples, 0 errors, ids on every row and equal to vLLM usage
+  counts. Legal 64.9%, narrator capped 473/1200, narrator verbatim copies 26/1200.
+- run2 hidden states extracted to `/data/hidden/qwen2.5-1.5b/run2` (spec-data volume): 150
+  shards, 32 GB, ~40 min GPU. Dedupe stores 11.1M of 89.6M sequence tokens (8.0x). 3,075/20,400
+  samples (15%) contain at least one non-canonical split vs re-tokenized text (stored as sampled).
+- Next: draft head per the plan proposed 2026-10-03 (awaiting user OK): EAGLE-1 matching vLLM's
+  `EagleLlamaForCausalLM` (no own embed/lm_head, no final norm), export smoke test with a random
+  head in vLLM first, then training with seed holdout and per-region acceptance metrics. (`--limit 2` first; check
   prompt/completion token-count mismatches and stored size), then `spec/draft_head.py`.
 
 ## Layout (target)
