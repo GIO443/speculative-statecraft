@@ -107,7 +107,32 @@ becomes compute saturated) and explain why. Every result must be explained by me
 - Harness additions in statecraft-serving: `server.volumes` (extra `docker run -v`; spec
   experiments mount `speculative-statecraft_spec-data:/data`, the compose volume's pinned name),
   and a failed server start now removes its container.
-- Next: `spec/train.py` (EAGLE-1 losses, seed holdout, per-region metrics). (`--limit 2` first; check
+- `spec/train.py` (commit 997017d): losses only at completion positions (context pass computes
+  only K/V; queries + MLP at loss positions), soft CE against the target's own next-token
+  distribution + smooth-L1 feature regression (w 0.1 / 1.0), uniform feature noise 0.1.
+  Offline eval chains 3 greedy draft steps exactly as vLLM does; match with the logged token is
+  an unbiased estimate of rejection-sampling acceptance (logs were sampled from the target's own
+  guided, T=0.7 distribution). Val = seeds with seed % 10 == 9 (2,040 samples, 15 games).
+- First full training (`configs/train/eagle1-qwen2.5-1.5b.yaml`, 3 epochs, 6,885 steps, ~30 min,
+  ~30 samples/s): head `/data/heads/eagle1-qwen2.5-1.5b-20261004T004139Z`. Held-out mean
+  acceptance length (k=3, max 4) **2.97**; per-position 0.79 / 0.64 / 0.54. By region: JSON
+  3.59 (0.95 / 0.87 / 0.77), diplomatic_message 1.94, narrator 1.75 (0.49 / 0.19 / 0.07). By
+  factions: 4 -> 2.60, 8 -> 2.83, 16 -> 2.97, 32 -> 3.11, 64 -> 3.06 (more JSON share, less
+  narrator share as games grow). Val still rising slowly at the end (message, narrator).
+- Online check (`configs/experiments/spec-validate.yaml`, results/spec-validate/20261004T011500Z;
+  eval seed 0, 1 repeat, 4 turns incl. 1 warmup, k=3). Seconds per turn at 4 / 16 / 64:
+  baseline 3.41 / 4.67 / 14.08; eagle1 3.03 / 4.20 / 15.03; ngram 4.00 / 4.72 / 16.78. vLLM
+  acceptance (all measured turns): eagle1 MAL 2.73 (0.71 / 0.56 / 0.46), ngram 2.25
+  (0.60 / 0.37 / 0.27). No preemptions; peak KV usage baseline 0.60, eagle1 0.77, ngram 0.86,
+  so the 64-faction slowdown is compute saturation, not KV pressure.
+- Finding: offline per-anchor MAL (2.97) overstates vLLM's per-draft MAL because a draft starts
+  only where the previous one ended; long accepted JSON runs skip easy positions. Offline `walk`
+  metric (simulates that) gives 2.64 overall (n64 2.77), within ~4% of vLLM's 2.73; within each
+  region per-anchor and walk barely differ (json 3.59 vs 3.54), so the gap is a mix effect.
+  Report walk MAL as the offline predictor of serving acceptance. `spec.train --eval-head DIR`
+  re-evaluates an exported head.
+- Next: Phase 4 sweep design (faction counts 4-64, 3 repeats, baseline / ngram / eagle1, k
+  values, generic drafter if one exists for Qwen2.5-1.5B) - propose before running. (`--limit 2` first; check
   prompt/completion token-count mismatches and stored size), then `spec/draft_head.py`.
 
 ## Layout (target)

@@ -41,6 +41,7 @@ import torch.nn.functional as F
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 from safetensors import safe_open
+from safetensors.torch import load_file
 
 from spec.draft_head import DraftHead, HeadConfig
 from spec.export import export
@@ -263,6 +264,23 @@ class AcceptStats:
         }
 
 
+def walk(anchors: list[int], accepted: list[int]) -> list[int]:
+    """Indices into `anchors` that vLLM would actually draft from.
+
+    Every anchor is a position the head could draft from, but online a draft starts only where
+    the previous one ended: after L accepted tokens plus the target's bonus token, the next
+    anchor is L + 1 positions later. Long accepted runs (easy JSON) therefore skip positions,
+    so the per-draft average vLLM reports weights hard positions more than the per-anchor one.
+    """
+    index = {a: i for i, a in enumerate(anchors)}
+    visited, a = [], anchors[0] if anchors else None
+    while a is not None and a in index:
+        i = index[a]
+        visited.append(i)
+        a += accepted[i] + 1
+    return visited
+
+
 def evaluate(
     head: DraftHead,
     emb: torch.Tensor,
@@ -271,8 +289,9 @@ def evaluate(
     depth: int,
     device: torch.device,
 ) -> dict[str, dict[str, Any]]:
+    """Acceptance per anchor (every draftable position) and per online draft (`walk`)."""
     head.eval()
-    stats = AcceptStats(depth)
+    stats, walked = AcceptStats(depth), AcceptStats(depth)
     for ref in refs:
         ids, feats = load_sample(ref)
         ids, feats = ids.to(device), feats.to(device)
@@ -280,12 +299,16 @@ def evaluate(
             a, acc = chain_accept(head, emb, ids, feats, ref.completion_start, depth)
         c = ref.completion_start
         regions = token_regions(tokenizer, ids[c:].tolist(), ref.actor)
-        for anchor, L in zip(a.tolist(), acc.tolist(), strict=True):
+        anchors, accepted = a.tolist(), acc.tolist()
+        on_walk = set(walk(anchors, accepted))
+        for i, (anchor, L) in enumerate(zip(anchors, accepted, strict=True)):
             region = regions[anchor + 2 - c]  # region of the first drafted token
             for key in ("all", region, f"n{ref.n_factions}"):
                 stats.add(key, [L])
+                if i in on_walk:
+                    walked.add(key, [L])
     head.train()
-    return stats.summary()
+    return {"anchors": stats.summary(), "walk": walked.summary()}
 
 
 def lr_at(step: int, total: int, cfg: TrainConfig) -> float:
@@ -321,6 +344,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("config", type=Path)
     parser.add_argument("--max-steps", type=int, default=None, help="stop early (smoke runs)")
     parser.add_argument("--eval-samples", type=int, default=None, help="cap the final eval")
+    parser.add_argument("--eval-head", type=Path, help="only evaluate this exported head dir")
     args = parser.parse_args(argv)
 
     cfg = TrainConfig.model_validate(yaml.safe_load(args.config.read_text("utf-8")))
@@ -358,6 +382,15 @@ def main(argv: list[str] | None = None) -> int:
         row = {"event": "eval", "step": step, "final": final, "samples": len(refs_)}
         log(row | {"seconds": round(time.perf_counter() - t0, 1), "accept": res})
         return res
+
+    if args.eval_head is not None:
+        state = load_file(str(args.eval_head / "model.safetensors"))
+        head.load_state_dict({k: v.float() for k, v in state.items()})
+        refs_ = val if args.eval_samples is None else val[: args.eval_samples]
+        res = run_eval(0, refs_, final=True)
+        summary = {"head": str(args.eval_head), "eval": res}
+        (out / "summary.json").write_text(json.dumps(summary, indent=2), "utf-8")
+        return 0
 
     run_eval(0, val_sub)
     data = Samples(train, cfg.seed)

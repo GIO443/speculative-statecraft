@@ -1,0 +1,23 @@
+{
+  "4": {
+    "seconds_per_turn_mean": 3.406460466668553,
+    "seconds_per_turn_stdev": 0.0,
+    "repeats": 1,
+    "legal_rate": 0.6666666666666666,
+    "excluded_turns": 0
+  },
+  "16": {
+    "seconds_per_turn_mean": 4.674965833333165,
+    "seconds_per_turn_stdev": 0.0,
+    "repeats": 1,
+    "legal_rate": 0.5208333333333334,
+    "excluded_turns": 0
+  },
+  "64": {
+    "seconds_per_turn_mean": 14.083658933338787,
+    "seconds_per_turn_stdev": 0.0,
+    "repeats": 1,
+    "legal_rate": 0.6822916666666666,
+    "excluded_turns": 0
+  }
+}

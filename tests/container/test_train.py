@@ -23,6 +23,7 @@ from spec.train import (  # noqa: E402
     sample_loss,
     split,
     token_regions,
+    walk,
 )
 
 H, V = 32, 64
@@ -173,3 +174,10 @@ def test_index_and_load_roundtrip(tmp_path: Path) -> None:
     for r in refs:
         ids, feats = load_sample(r)
         assert len(ids) == len(feats) == r.length and ids.dtype == torch.int64
+
+
+def test_walk_skips_accepted_positions() -> None:
+    anchors = [3, 4, 5, 6, 7, 8]
+    # Draft at 3 accepts 2 -> next draft at 3+2+1=6; accepts 0 -> 7; accepts 3 -> 11 (end).
+    assert walk(anchors, [2, 9, 9, 0, 3, 9]) == [0, 3, 4]
+    assert walk([], []) == []
