@@ -32,3 +32,6 @@ volumes:
   hf-cache:
     external: true
   spec-data:
+    # Pinned name: compose would otherwise prefix it, and the vLLM container (plain docker run
+    # from the bench harness) mounts it by this exact name.
+    name: speculative-statecraft_spec-data

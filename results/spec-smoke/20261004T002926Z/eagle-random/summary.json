@@ -1,0 +1,9 @@
+{
+  "4": {
+    "seconds_per_turn_mean": 6.627999299991643,
+    "seconds_per_turn_stdev": 0.0,
+    "repeats": 1,
+    "legal_rate": 0.5,
+    "excluded_turns": 0
+  }
+}

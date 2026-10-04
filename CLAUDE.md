@@ -92,9 +92,22 @@ becomes compute saturated) and explain why. Every result must be explained by me
 - run2 hidden states extracted to `/data/hidden/qwen2.5-1.5b/run2` (spec-data volume): 150
   shards, 32 GB, ~40 min GPU. Dedupe stores 11.1M of 89.6M sequence tokens (8.0x). 3,075/20,400
   samples (15%) contain at least one non-canonical split vs re-tokenized text (stored as sampled).
-- Next: draft head per the plan proposed 2026-10-03 (awaiting user OK): EAGLE-1 matching vLLM's
-  `EagleLlamaForCausalLM` (no own embed/lm_head, no final norm), export smoke test with a random
-  head in vLLM first, then training with seed holdout and per-region acceptance metrics. (`--limit 2` first; check
+- Draft head plan approved 2026-10-03. `spec/draft_head.py` (EAGLE-1, 51.5M params, matches
+  vLLM's `EagleLlamaForCausalLM`: `fc(cat(embed, feature))`, layer 0 without input norm, no
+  final norm, target's tied embedding as LM head) and `spec/export.py` (config.json +
+  model.safetensors with `fc.*` / `layers.0.*` only). CPU tests: layer equals HF
+  `LlamaDecoderLayer` with Identity input norm; RoPE equals HF's.
+- Export smoke (`configs/experiments/spec-smoke.yaml`, run via statecraft-serving's
+  `bench.harness` with `--results-dir results`): random head loads as an EAGLE drafter with
+  guided decoding + prefix caching (0.1% acceptance, as expected; weights +0.10 GiB, so embed and
+  lm_head are shared). n-gram (k=3, lookup 2-5) at 4 factions: mean acceptance length 2.32,
+  57% draft acceptance, already a strong baseline. Enabling speculation cuts KV cache from 1.95 to
+  1.35-1.46 GiB at util 0.8 (bigger CUDA graph pool estimate, 0.44-0.63 GiB): account for it in
+  Phase 4 KV predictions and high-faction runs.
+- Harness additions in statecraft-serving: `server.volumes` (extra `docker run -v`; spec
+  experiments mount `speculative-statecraft_spec-data:/data`, the compose volume's pinned name),
+  and a failed server start now removes its container.
+- Next: `spec/train.py` (EAGLE-1 losses, seed holdout, per-region metrics). (`--limit 2` first; check
   prompt/completion token-count mismatches and stored size), then `spec/draft_head.py`.
 
 ## Layout (target)

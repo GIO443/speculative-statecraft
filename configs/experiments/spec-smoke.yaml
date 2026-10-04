@@ -1,0 +1,43 @@
+name: spec-smoke
+description: >
+  Format and wiring check, not for reporting: an untrained (random) EAGLE-1 head and n-gram
+  speculation load in the pinned vLLM with guided decoding and prefix caching on. Acceptance
+  for the random head should be ~0.
+model_config_path: configs/models/qwen2.5-1.5b-instruct-bf16.yaml   # in statecraft-serving
+game_config_path: configs/game/default.yaml
+
+server:
+  port: 8000
+  gpu_memory_utilization: 0.8
+  max_model_len: 16384
+  extra_flags: ["--enable-prefix-caching"]
+  startup_timeout_s: 900
+  volumes: ["speculative-statecraft_spec-data:/data"]
+
+agent:
+  faction_max_tokens: 160
+  narrator_max_tokens: 200
+  temperature: 0.7
+  guided_decoding: true
+  faction_priority: null
+  narrator_priority: null
+  narrator: sequential
+
+run:
+  faction_counts: [4]
+  repeats: 1
+  seeds: [0]
+  turns: 2
+  warmup_turns: 1
+  server_warmup_factions: 4
+  server_warmup_turns: 1
+  server_warmup_seed: 1000
+  request_timeout_s: 600
+  metrics_interval_s: 1.0
+  stall_timeout_s: 180
+
+variants:
+  - name: eagle-random
+    extra_flags: ["--speculative-config", '{"method": "eagle", "model": "/data/heads/random", "num_speculative_tokens": 3}']
+  - name: ngram
+    extra_flags: ["--speculative-config", '{"method": "ngram", "num_speculative_tokens": 3, "prompt_lookup_min": 2, "prompt_lookup_max": 5}']
