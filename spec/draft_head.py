@@ -99,6 +99,12 @@ def _rotate_half(x: torch.Tensor) -> torch.Tensor:
     return torch.cat((-b, a), dim=-1)
 
 
+def _rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    """x: [B, heads, T, D]; cos/sin: [B, T, D]."""
+    cos, sin = cos[:, None], sin[:, None]
+    return x * cos + _rotate_half(x) * sin
+
+
 class Attention(nn.Module):
     def __init__(self, cfg: HeadConfig) -> None:
         super().__init__()
@@ -109,17 +115,38 @@ class Attention(nn.Module):
         self.v_proj = nn.Linear(h, cfg.num_key_value_heads * d, bias=False)
         self.o_proj = nn.Linear(cfg.num_attention_heads * d, h, bias=False)
 
-    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    def _heads(self, x: torch.Tensor, n: int) -> torch.Tensor:
         b, t, _ = x.shape
-        c = self.cfg
-        q = self.q_proj(x).view(b, t, c.num_attention_heads, c.head_dim).transpose(1, 2)
-        k = self.k_proj(x).view(b, t, c.num_key_value_heads, c.head_dim).transpose(1, 2)
-        v = self.v_proj(x).view(b, t, c.num_key_value_heads, c.head_dim).transpose(1, 2)
-        cos, sin = cos[:, None], sin[:, None]
-        q = q * cos + _rotate_half(q) * sin
-        k = k * cos + _rotate_half(k) * sin
-        out = F.scaled_dot_product_attention(q, k, v, is_causal=True, enable_gqa=True)
+        return x.view(b, t, n, self.cfg.head_dim).transpose(1, 2)
+
+    def kv(
+        self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Rotated keys and values, [B, kv_heads, T, D]."""
+        n = self.cfg.num_key_value_heads
+        return _rope(self._heads(self.k_proj(x), n), cos, sin), self._heads(self.v_proj(x), n)
+
+    def attend(
+        self,
+        xq: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        mask: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Queries from xq against given keys/values; mask [Tq, Tk] (True = attend) or None
+        for plain causal attention over a full sequence."""
+        b, t, _ = xq.shape
+        q = _rope(self._heads(self.q_proj(xq), self.cfg.num_attention_heads), cos, sin)
+        out = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=mask, is_causal=mask is None, enable_gqa=True
+        )
         return self.o_proj(out.transpose(1, 2).reshape(b, t, -1))
+
+    def forward(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+        k, v = self.kv(x, cos, sin)
+        return self.attend(x, cos, sin, k, v, None)
 
 
 class MLP(nn.Module):
@@ -147,6 +174,18 @@ class DecoderLayer(nn.Module):
         h = x + self.self_attn(x, cos, sin)
         return h + self.mlp(self.post_attention_layernorm(h))
 
+    def forward_queries(
+        self,
+        xq: torch.Tensor,
+        cos: torch.Tensor,
+        sin: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        h = xq + self.self_attn.attend(xq, cos, sin, k, v, mask)
+        return h + self.mlp(self.post_attention_layernorm(h))
+
 
 class DraftHead(nn.Module):
     def __init__(self, cfg: HeadConfig) -> None:
@@ -155,12 +194,44 @@ class DraftHead(nn.Module):
         self.fc = nn.Linear(2 * cfg.hidden_size, cfg.hidden_size, bias=False)
         self.layers = nn.ModuleList([DecoderLayer(cfg)])
 
+    def inputs(self, embeds: torch.Tensor, features: torch.Tensor) -> torch.Tensor:
+        return self.fc(torch.cat((embeds, features), dim=-1))
+
+    def rope(
+        self, positions: torch.Tensor, dtype: torch.dtype
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        return rope_cos_sin(positions, self.cfg.head_dim, self.cfg.rope_theta, dtype)
+
     def forward(
         self, embeds: torch.Tensor, features: torch.Tensor, positions: torch.Tensor
     ) -> torch.Tensor:
         """embeds: embed(x_{i+1}), features: f_i, positions: i. All [B, T, ...]; causal."""
-        x = self.fc(torch.cat((embeds, features), dim=-1))
-        cos, sin = rope_cos_sin(positions, self.cfg.head_dim, self.cfg.rope_theta, x.dtype)
+        x = self.inputs(embeds, features)
+        cos, sin = self.rope(positions, x.dtype)
         for layer in self.layers:
             x = layer(x, cos, sin)
         return x
+
+    # Query-subset path. With one layer, a position's output depends on the other positions
+    # only through layer 0's keys/values, which come straight from fc(...). So the context's
+    # keys/values can be computed once and outputs evaluated at just the positions that need
+    # them (training loss positions, chained draft steps), each with its own attention mask.
+
+    def context(
+        self, x: torch.Tensor, positions: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Layer-0 keys/values for inputs x = self.inputs(...) at the given positions."""
+        cos, sin = self.rope(positions, x.dtype)
+        return self.layers[0].self_attn.kv(x, cos, sin)
+
+    def forward_queries(
+        self,
+        xq: torch.Tensor,
+        positions: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """Outputs for query inputs xq at `positions`, attending to k/v under mask [Tq, Tk]."""
+        cos, sin = self.rope(positions, xq.dtype)
+        return self.layers[0].forward_queries(xq, cos, sin, k, v, mask)

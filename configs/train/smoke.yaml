@@ -1,0 +1,29 @@
+# Pipeline check on real shards (run with --max-steps); not for reporting.
+name: smoke
+target: Qwen/Qwen2.5-1.5B-Instruct
+hidden_dir: /data/hidden/qwen2.5-1.5b/run2
+runs_dir: /data/runs
+heads_dir: /data/heads
+results_dir: results/train
+
+# Held-out games: seeds 109, 119, 129, 139 -> 10% of games at every faction count.
+val_seed_mod: 10
+val_seed_rem: 9
+
+epochs: 3
+lr: 3.0e-4
+min_lr_ratio: 0.1
+warmup_steps: 10
+weight_decay: 0.0
+grad_clip: 1.0
+accum: 8
+feature_noise: 0.1     # EAGLE-1: uniform(-0.1, 0.1) on input features
+w_reg: 1.0
+w_cls: 0.1             # EAGLE-1 weighting
+
+eval_depth: 3          # matches num_speculative_tokens in the vLLM smoke config
+eval_every_steps: 20
+eval_samples: 40
+log_every_steps: 10
+num_workers: 2
+seed: 0
