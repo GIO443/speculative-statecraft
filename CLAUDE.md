@@ -131,8 +131,22 @@ becomes compute saturated) and explain why. Every result must be explained by me
   region per-anchor and walk barely differ (json 3.59 vs 3.54), so the gap is a mix effect.
   Report walk MAL as the offline predictor of serving acceptance. `spec.train --eval-head DIR`
   re-evaluates an exported head.
-- Next: Phase 4 sweep design (faction counts 4-64, 3 repeats, baseline / ngram / eagle1, k
-  values, generic drafter if one exists for Qwen2.5-1.5B) - propose before running. (`--limit 2` first; check
+- 6-epoch head (`configs/train/eagle1-qwen2.5-1.5b-6ep.yaml`, 13,770 steps, ~55 min):
+  `/data/heads/eagle1-qwen2.5-1.5b-6ep-20261004T022949Z`, used for Phase 4. Held-out walk MAL
+  2.72 (vs 2.64 at 3 epochs); per-anchor 3.02. Walk by region: json 3.58, message 1.97, narrator
+  1.87 (narrator gained most: 1.72 -> 1.87). Walk by factions: 4 2.41, 8 2.59, 16 2.70, 32 2.88,
+  64 2.82.
+- No usable public EAGLE drafter for Qwen2.5-1.5B-Instruct (HF search 2026-10-04; the only
+  candidate, JerryGJX/TLT-Eagle3-Qwen2.5-1.5B-76000, is a raw DeepSpeed checkpoint, no config).
+- Finding: a generic draft model (Qwen2.5-0.5B-Instruct, `method: draft_model`) does not fit at
+  util 0.8 on 8 GB: weights 3.9 GiB (+0.92), CUDA graph pool 0.54 GiB, KV left 0.30 GiB while
+  one 16k request needs 0.62 GiB (the draft keeps its own 24-layer KV, ~12 KiB/token on top of the
+  target's 28 KiB). vLLM refuses to start (`configs/experiments/spec-smoke-draft.yaml`). Our head
+  costs 0.10 GiB weights + 1 layer of KV. Not in the sweep; running it would need eager mode or
+  higher util, which would change a second variable.
+- Phase 4 sweep `configs/experiments/phase4-1.5b.yaml` running (started 2026-10-04): baseline,
+  ngram-k3, eagle1-k1/k2/k3; 4-64 factions, 3 repeats, seeds 0-2, Phase 1 run settings. Log:
+  `data/phase4-sweep.log`. Analyse with `uv run python -m analysis.phase4 results/phase4-1.5b/<stamp>`. (`--limit 2` first; check
   prompt/completion token-count mismatches and stored size), then `spec/draft_head.py`.
 
 ## Layout (target)

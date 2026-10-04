@@ -1,9 +1,10 @@
 name: phase4-1.5b
 description: >
   Phase 4: speculative decoding on the statecraft workload, Qwen2.5-1.5B bf16 target. Seconds
-  per turn and acceptance vs faction count for no speculation, n-gram (prompt lookup), a generic
-  small draft model (Qwen2.5-0.5B-Instruct, no training), and our EAGLE-1 head trained on the
-  simulation's own outputs, at k = 1, 2, 3 draft tokens. Run settings equal statecraft-serving's
+  per turn and acceptance vs faction count for no speculation, n-gram (prompt lookup), and our
+  EAGLE-1 head trained on the simulation's own outputs, at k = 1, 2, 3 draft tokens. A generic
+  small draft model (Qwen2.5-0.5B-Instruct) does not fit at these settings: see
+  spec-smoke-draft.yaml and CLAUDE.md. Run settings equal statecraft-serving's
   phase1-1.5b `default` (guided decoding, prefix caching, util 0.8), so `baseline` is comparable.
   Speculation shrinks the KV cache at the same utilization (larger CUDA graph pool, draft
   weights/KV); that is part of its cost and is recorded per variant, not compensated.
@@ -40,16 +41,14 @@ run:
   metrics_interval_s: 1.0
   stall_timeout_s: 180
 
-# HEAD is filled in once the 6-epoch head is exported (see CLAUDE.md).
+# Our head: 6-epoch EAGLE-1 (offline walk MAL 2.72 at k=3 on held-out games).
 variants:
   - name: baseline
   - name: ngram-k3
     extra_flags: ["--speculative-config", '{"method": "ngram", "num_speculative_tokens": 3, "prompt_lookup_min": 2, "prompt_lookup_max": 5}']
-  - name: draft0.5b-k3
-    extra_flags: ["--speculative-config", '{"method": "draft_model", "model": "Qwen/Qwen2.5-0.5B-Instruct", "num_speculative_tokens": 3}']
   - name: eagle1-k1
-    extra_flags: ["--speculative-config", '{"method": "eagle", "model": "HEAD", "num_speculative_tokens": 1}']
+    extra_flags: ["--speculative-config", '{"method": "eagle", "model": "/data/heads/eagle1-qwen2.5-1.5b-6ep-20261004T022949Z", "num_speculative_tokens": 1}']
   - name: eagle1-k2
-    extra_flags: ["--speculative-config", '{"method": "eagle", "model": "HEAD", "num_speculative_tokens": 2}']
+    extra_flags: ["--speculative-config", '{"method": "eagle", "model": "/data/heads/eagle1-qwen2.5-1.5b-6ep-20261004T022949Z", "num_speculative_tokens": 2}']
   - name: eagle1-k3
-    extra_flags: ["--speculative-config", '{"method": "eagle", "model": "HEAD", "num_speculative_tokens": 3}']
+    extra_flags: ["--speculative-config", '{"method": "eagle", "model": "/data/heads/eagle1-qwen2.5-1.5b-6ep-20261004T022949Z", "num_speculative_tokens": 3}']

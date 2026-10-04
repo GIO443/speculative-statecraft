@@ -1,0 +1,42 @@
+name: spec-smoke-draft
+description: >
+  Reproduces a finding, not for reporting: a generic draft model (Qwen2.5-0.5B-Instruct,
+  method draft_model) does not start at util 0.8 on the 8 GB GPU. Weights 3.9 GiB (+0.92 GiB
+  draft) and a 0.54 GiB CUDA graph pool leave 0.3 GiB of KV, while one 16k-token request needs
+  0.62 GiB (draft KV adds ~12 KiB/token to the target's 28 KiB). vLLM refuses to start.
+model_config_path: configs/models/qwen2.5-1.5b-instruct-bf16.yaml   # in statecraft-serving
+game_config_path: configs/game/default.yaml
+
+server:
+  port: 8000
+  gpu_memory_utilization: 0.8
+  max_model_len: 16384
+  extra_flags: ["--enable-prefix-caching"]
+  startup_timeout_s: 900
+  volumes: ["speculative-statecraft_spec-data:/data"]
+
+agent:
+  faction_max_tokens: 160
+  narrator_max_tokens: 200
+  temperature: 0.7
+  guided_decoding: true
+  faction_priority: null
+  narrator_priority: null
+  narrator: sequential
+
+run:
+  faction_counts: [4, 64]
+  repeats: 1
+  seeds: [0]
+  turns: 2
+  warmup_turns: 1
+  server_warmup_factions: 4
+  server_warmup_turns: 1
+  server_warmup_seed: 1000
+  request_timeout_s: 600
+  metrics_interval_s: 1.0
+  stall_timeout_s: 180
+
+variants:
+  - name: draft0.5b-k3
+    extra_flags: ["--speculative-config", '{"method": "draft_model", "model": "Qwen/Qwen2.5-0.5B-Instruct", "num_speculative_tokens": 3}']
