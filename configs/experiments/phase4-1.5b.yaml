@@ -1,0 +1,55 @@
+name: phase4-1.5b
+description: >
+  Phase 4: speculative decoding on the statecraft workload, Qwen2.5-1.5B bf16 target. Seconds
+  per turn and acceptance vs faction count for no speculation, n-gram (prompt lookup), a generic
+  small draft model (Qwen2.5-0.5B-Instruct, no training), and our EAGLE-1 head trained on the
+  simulation's own outputs, at k = 1, 2, 3 draft tokens. Run settings equal statecraft-serving's
+  phase1-1.5b `default` (guided decoding, prefix caching, util 0.8), so `baseline` is comparable.
+  Speculation shrinks the KV cache at the same utilization (larger CUDA graph pool, draft
+  weights/KV); that is part of its cost and is recorded per variant, not compensated.
+model_config_path: configs/models/qwen2.5-1.5b-instruct-bf16.yaml   # in statecraft-serving
+game_config_path: configs/game/default.yaml
+
+server:
+  port: 8000
+  gpu_memory_utilization: 0.8
+  max_model_len: 16384
+  extra_flags: ["--enable-prefix-caching"]
+  startup_timeout_s: 900
+  volumes: ["speculative-statecraft_spec-data:/data"]
+
+agent:
+  faction_max_tokens: 160
+  narrator_max_tokens: 200
+  temperature: 0.7
+  guided_decoding: true
+  faction_priority: null
+  narrator_priority: null
+  narrator: sequential
+
+run:
+  faction_counts: [4, 8, 16, 32, 64]
+  repeats: 3
+  seeds: [0, 1, 2]          # reserved eval seeds: never in the draft head's training data
+  turns: 6
+  warmup_turns: 1
+  server_warmup_factions: 8
+  server_warmup_turns: 2
+  server_warmup_seed: 1000
+  request_timeout_s: 600
+  metrics_interval_s: 1.0
+  stall_timeout_s: 180
+
+# HEAD is filled in once the 6-epoch head is exported (see CLAUDE.md).
+variants:
+  - name: baseline
+  - name: ngram-k3
+    extra_flags: ["--speculative-config", '{"method": "ngram", "num_speculative_tokens": 3, "prompt_lookup_min": 2, "prompt_lookup_max": 5}']
+  - name: draft0.5b-k3
+    extra_flags: ["--speculative-config", '{"method": "draft_model", "model": "Qwen/Qwen2.5-0.5B-Instruct", "num_speculative_tokens": 3}']
+  - name: eagle1-k1
+    extra_flags: ["--speculative-config", '{"method": "eagle", "model": "HEAD", "num_speculative_tokens": 1}']
+  - name: eagle1-k2
+    extra_flags: ["--speculative-config", '{"method": "eagle", "model": "HEAD", "num_speculative_tokens": 2}']
+  - name: eagle1-k3
+    extra_flags: ["--speculative-config", '{"method": "eagle", "model": "HEAD", "num_speculative_tokens": 3}']
