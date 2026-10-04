@@ -11,6 +11,8 @@ results/**
 !results/**/
 !results/**/summary*.json
 !results/**/seconds_per_turn.*
+!results/**/speedup.png
+!results/**/phase4.*
 !results/**/env.json
 !results/**/config.yaml
 !results/**/*.md

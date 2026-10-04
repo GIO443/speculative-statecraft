@@ -1,0 +1,129 @@
+experiment: phase4-1.5b
+variant: eagle1-k2
+model:
+  name: qwen2.5-1.5b-bf16
+  model: Qwen/Qwen2.5-1.5B-Instruct
+  served_flags:
+  - --dtype
+  - bfloat16
+  architecture:
+    num_layers: 28
+    num_kv_heads: 2
+    head_dim: 128
+    kv_dtype_bytes: 2
+  weights_gib: 2.98
+  overhead_gib: 0.39
+  eager_savings_gib: 1.08
+  notes: 'Memory figures are CALIBRATED, not blind (RTX 4070 Laptop, 8188 MiB, utilization
+    0.8). Default (compiled + CUDA graphs): weights 2.98 GiB, KV 1.93-1.95 GiB (72,400-72,992
+    tokens). --enforce-eager: KV 3.01 GiB (112,704 tokens), so eager mode releases
+    1.08 GiB, about 3x the 0.35 GiB CUDA graph figure vLLM logs. The first prediction
+    (graphs only) was off by +31%. Presumed mechanism: eager also disables torch.compile,
+    lowering profiled peak memory; not yet verified from logs. overhead_gib is the
+    remainder: 6.40 - 2.98 - 1.95 - 1.08.
+
+    '
+server:
+  port: 8000
+  gpu_memory_utilization: 0.8
+  max_model_len: 16384
+  extra_flags:
+  - --enable-prefix-caching
+  - --speculative-config
+  - '{"method": "eagle", "model": "/data/heads/eagle1-qwen2.5-1.5b-6ep-20261004T022949Z",
+    "num_speculative_tokens": 2}'
+  startup_timeout_s: 900.0
+  volumes:
+  - speculative-statecraft_spec-data:/data
+agent:
+  faction_max_tokens: 160
+  narrator_max_tokens: 200
+  temperature: 0.7
+  guided_decoding: true
+  faction_priority: null
+  narrator_priority: null
+  narrator: sequential
+run:
+  faction_counts:
+  - 4
+  - 8
+  - 16
+  - 32
+  - 64
+  repeats: 3
+  seeds:
+  - 0
+  - 1
+  - 2
+  turns: 6
+  warmup_turns: 1
+  server_warmup_factions: 8
+  server_warmup_turns: 2
+  server_warmup_seed: 1000
+  request_timeout_s: 600.0
+  metrics_interval_s: 1.0
+  stall_timeout_s: 180.0
+game:
+  provinces_per_faction: 3
+  diagonal_edge_fraction: 0.15
+  province_income_min: 3
+  province_income_max: 8
+  starting_treasury: 50
+  starting_army_per_province: 10
+  troops_per_build: 10
+  troops_cost: 20
+  market_cost: 40
+  market_income: 3
+  max_market_level: 3
+  fort_cost: 30
+  fort_defense_bonus: 0.25
+  max_fort_level: 3
+  troops_per_upkeep_gold: 5
+  combat_variance: 0.2
+  trade_pact_income: 4
+  relation_start: 0
+  relation_min: -100
+  relation_max: 100
+  relation_delta_attack: -30
+  relation_delta_trade: 5
+  relation_delta_treaty: 15
+  proposal_ttl_turns: 2
+  max_message_chars: 200
+  history_turns: 3
+  narrator_max_words: 120
+  name_min_syllables: 2
+  name_max_syllables: 3
+  name_syllables:
+  - ka
+  - ro
+  - vel
+  - mar
+  - tha
+  - en
+  - dor
+  - is
+  - gal
+  - un
+  - bre
+  - sha
+  - lo
+  - qui
+  - tor
+  - an
+  - zel
+  - mi
+  - ra
+  - ost
+  - fen
+  - kor
+  - ul
+  - dra
+  personalities:
+  - cautious merchant republic that prefers trade to war
+  - aggressive warrior kingdom eager to expand by force
+  - devout theocracy that values alliances with the faithful
+  - opportunistic raiders who strike at weakened neighbours
+  - isolationist highland clans that fortify and wait
+  - ambitious empire seeking hegemony through diplomacy and war
+  - honourable knights who never break a treaty
+  - scheming court that plays rivals against each other

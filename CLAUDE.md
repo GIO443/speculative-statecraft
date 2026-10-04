@@ -144,9 +144,25 @@ becomes compute saturated) and explain why. Every result must be explained by me
   target's 28 KiB). vLLM refuses to start (`configs/experiments/spec-smoke-draft.yaml`). Our head
   costs 0.10 GiB weights + 1 layer of KV. Not in the sweep; running it would need eager mode or
   higher util, which would change a second variable.
-- Phase 4 sweep `configs/experiments/phase4-1.5b.yaml` running (started 2026-10-04): baseline,
-  ngram-k3, eagle1-k1/k2/k3; 4-64 factions, 3 repeats, seeds 0-2, Phase 1 run settings. Log:
-  `data/phase4-sweep.log`. Analyse with `uv run python -m analysis.phase4 results/phase4-1.5b/<stamp>`. (`--limit 2` first; check
+- **Phase 4 sweep done** (results/phase4-1.5b/20261004T033747Z, 0 failed/excluded turns;
+  `uv run python -m analysis.phase4 <dir>` writes phase4.md/csv, speedup.png). Speedup over no
+  speculation at 4 / 8 / 16 / 32 / 64 factions:
+  eagle1-k1 1.28 / 1.24 / 1.05 / 0.88 / 0.83; eagle1-k2 1.34 / 1.23 / 1.19 / 0.90 / 0.91;
+  eagle1-k3 1.17 / 1.22 / 1.09 / 0.94 / 0.92; ngram-k3 1.15 / 0.96 / 0.98 / 0.81 / 0.77.
+  Baseline s/turn 3.63 / 4.34 / 5.22 / 6.70 / 15.06 (Phase 1 default: 3.84 / - / 5.17 / - / 14.31).
+  vLLM MAL eagle1-k3 2.38 / 2.56 / 2.72 / 2.89 / 2.89 vs ngram 2.32 / 2.21 / 2.15 / 2.04 / 2.17.
+  KV GiB: baseline 1.93, k1 1.56, k2 1.41, k3 1.46, ngram 1.35.
+- Crossover between 16 and 32 factions for every variant. Measured facts so far: no preemptions
+  (peak KV usage <= 0.87); TTFT unchanged, so prefill is not the cause; the loss is entirely in
+  the decode-dominated decide phase (64 factions: 11.5 s baseline vs 14.6 s k1). Per-token
+  latency x MAL gives engine step time at 64 factions: baseline ~134 ms, k1 ~326 ms, k3 ~384 ms,
+  i.e. enabling speculation at all costs ~2.4x per step, extra draft tokens little more. Same
+  attention backend (FLASH_ATTN) both ways; with spec vLLM caps scheduled tokens at 2048 and
+  over-estimates the CUDA graph pool (0.54 est vs 0.32 actual GiB), which is part of the KV loss.
+  At 4 factions the narrator (one streaming request) is 2/3 of the turn; spec cuts it 2.46 -> 1.94 s.
+- Open: why a speculative step is ~2.4x a plain decode step at batch ~30 with 4-8k contexts.
+  Needs a controlled micro-benchmark (fixed batch x context, baseline vs eagle k1) and a profile
+  of one step, not guessing. Proposed as the next step. (`--limit 2` first; check
   prompt/completion token-count mismatches and stored size), then `spec/draft_head.py`.
 
 ## Layout (target)

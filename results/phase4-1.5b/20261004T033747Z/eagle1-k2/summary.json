@@ -1,0 +1,37 @@
+{
+  "4": {
+    "seconds_per_turn_mean": 2.715398006666995,
+    "seconds_per_turn_stdev": 0.2344135125263366,
+    "repeats": 3,
+    "legal_rate": 0.5666666666666667,
+    "excluded_turns": 0
+  },
+  "8": {
+    "seconds_per_turn_mean": 3.5149981066652494,
+    "seconds_per_turn_stdev": 0.3755369924545835,
+    "repeats": 3,
+    "legal_rate": 0.725,
+    "excluded_turns": 0
+  },
+  "16": {
+    "seconds_per_turn_mean": 4.377035073332567,
+    "seconds_per_turn_stdev": 0.18949792037369748,
+    "repeats": 3,
+    "legal_rate": 0.6208333333333333,
+    "excluded_turns": 0
+  },
+  "32": {
+    "seconds_per_turn_mean": 7.452062806668497,
+    "seconds_per_turn_stdev": 0.33161948438460404,
+    "repeats": 3,
+    "legal_rate": 0.7229166666666667,
+    "excluded_turns": 0
+  },
+  "64": {
+    "seconds_per_turn_mean": 16.627148660001694,
+    "seconds_per_turn_stdev": 0.3976061585372826,
+    "repeats": 3,
+    "legal_rate": 0.7010416666666667,
+    "excluded_turns": 0
+  }
+}
