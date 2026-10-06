@@ -13,6 +13,7 @@ results/**
 !results/**/seconds_per_turn.*
 !results/**/speedup.png
 !results/**/phase4.*
+!results/**/in_flight.png
 !results/**/env.json
 !results/**/config.yaml
 !results/**/*.md

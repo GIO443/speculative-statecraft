@@ -53,7 +53,8 @@ the prompt, and most JSON values and all message text are new.
 Structure the target has to emit is nearly free to draft; free text costs the head the same as
 it costs any small drafter. *Workloads that are mostly structured output gain the most.*
 
-**3. Speculation stops paying between 16 and 32 concurrent requests.** Below that, decode is
+**3. Speculation stops paying at ~65-130k tokens of context in flight (here, 16-32 agents).**
+Below that, decode is
 memory-bandwidth bound: each step streams the 3 GB of weights to produce one token per request,
 and the GPU's compute sits mostly idle. Verifying 2-4 tokens per step uses that idle compute,
 so per-token latency falls (17.8 ms to 9.7 ms at 4 factions with k=3). At 32 to 64 the step
@@ -63,10 +64,18 @@ speculation makes each step cost more than it saves. At 64 factions a plain deco
 in decoding: there were no preemptions, KV usage peaked at 87%, and time to first token is
 unchanged. *Why* a speculative step costs ~2.4x even at k=1 is not yet pinned down. vLLM uses
 the same attention backend either way, so the next step is a profile of one step, not a guess.
-As in the companion repo, prompt length grows with faction count (1.35k to 7.9k tokens), so
-this crossover mixes "more concurrent requests" with "longer contexts per request". A
-fixed-prompt control is needed to say which one moves it. *Practical rule: turn speculation
-on for latency at low concurrency and off under load.*
+Prompt length grows with faction count (1.35k to 7.9k tokens), so a control run fixed every
+prompt at ~8k tokens (64-faction world) and varied only how many factions act. With long
+prompts everywhere, the crossover moves down, from between 16 and 32 agents to between 8 and
+16. Both runs fall on one curve when plotted against **context in flight** (agents x prompt
+tokens). Speculation pays below ~65k tokens in flight and loses above ~130k. That is the
+point where reading every sequence's KV, rather than the weights, starts to dominate each
+decode step (right panel: baseline per-token latency on the same axis).
+
+![Speedup and per-token latency vs context in flight](results/phase4-control/20261006T222655Z/in_flight.png)
+
+*Practical rule: gate speculation on agents x context (KV bytes per decode step), not on
+request count alone.*
 
 **4. On 8 GB, speculation costs KV capacity, and only a very small drafter can afford it.** At
 the same 0.8 GPU-memory setting, the KV cache available to the target shrinks from 1.93 GiB to
@@ -164,7 +173,7 @@ speculative-statecraft-trainer python3 -m pytest tests/container`.
   workloads.
 - **Fixed settings:** speculation runs at the same 0.8 memory setting as the baseline, so its
   smaller KV cache counts against it rather than being compensated.
-- **Confounded axis:** faction count moves concurrency and prompt length together (see
-  finding 3).
+- **Session drift:** the same configuration rerun in a later session was 6-7% faster, so
+  speedups are always within-run ratios.
 - **Open question:** the mechanism behind the 2.4x speculative step cost at high batch is not yet
   explained (finding 3).

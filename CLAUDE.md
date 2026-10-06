@@ -160,6 +160,13 @@ becomes compute saturated) and explain why. Every result must be explained by me
   attention backend (FLASH_ATTN) both ways; with spec vLLM caps scheduled tokens at 2048 and
   over-estimates the CUDA graph pool (0.54 est vs 0.32 actual GiB), which is part of the KV loss.
   At 4 factions the narrator (one streaming request) is 2/3 of the turn; spec cuts it 2.46 -> 1.94 s.
+- **Fixed-prompt control done** (2026-10-06, results/phase4-control/20261006T222655Z; config
+  `phase4-control.yaml`, `run.world_factions: 64`, statecraft-serving cf7f88c). Baseline s/turn
+  at 4-64 acting agents with ~8k prompts: 4.58 / 5.40 / 6.53 / 8.76 / 14.12; eagle1-k2 speedup
+  1.20 / 1.07~ / 0.94 / 0.94~ / 0.91. Both runs collapse onto one curve vs context in flight
+  (agents x prompt tokens): speculation pays below ~65k, loses above ~130k; baseline TPOT flat
+  ~18-23 ms to ~65k, ~125-134 ms at 525k (`analysis.in_flight`, in_flight.png). Session drift:
+  the 64-agent case (identical game) was 6-7% faster than in the phase4 sweep; compare ratios.
 - Open: why a speculative step is ~2.4x a plain decode step at batch ~30 with 4-8k contexts.
   Needs a controlled micro-benchmark (fixed batch x context, baseline vs eagle k1) and a profile
   of one step, not guessing. Proposed as the next step. (`--limit 2` first; check
