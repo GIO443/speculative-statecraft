@@ -8,25 +8,33 @@ This repo answers that on the workload from
 LLM factions each emit one guided-JSON decision per turn, plus a streamed narrator, served by
 vLLM on one 8 GB laptop GPU. We collect the target model's own outputs, train an EAGLE-1 draft
 head on them (51.5M parameters, under an hour on the same laptop), and compare it with no
-speculation and with n-gram speculation across faction counts.
+speculation and with n-gram speculation across faction counts. The head's serving acceptance
+is predicted offline before it is served, and the prediction lands within 3% of what vLLM
+measures at every load (finding 6).
+
+Companion repo: [statecraft-serving](https://github.com/GIO443/statecraft-serving) (the
+simulation, the benchmark harness, and the non-speculative serving results).
 
 ![Speedup over no speculation vs faction count](results/phase4-1.5b/20261004T033747Z/speedup.png)
 
 ## Findings (Qwen2.5-1.5B-Instruct, bf16, RTX 4070 Laptop 8 GB, vLLM 0.30.0)
 
-Speedup in seconds per world turn over no speculation. Mean of 3 seeded games x 5 timed turns,
-on seeds the head never saw in training. k is the number of draft tokens per step.
+Seconds per world turn, mean ± standard deviation over 3 seeded games (5 timed turns each), on
+seeds the head never saw in training, with speedup over no speculation in brackets. k is the
+number of draft tokens per step.
 
-| Factions | no spec (s/turn) | our head k=1 | our head k=2 | our head k=3 | n-gram k=3 |
+| Factions | no speculation | our head k=1 | our head k=2 | our head k=3 | n-gram k=3 |
 |---|---|---|---|---|---|
-| 4 | 3.63 | 1.28x | **1.34x** | 1.17x | 1.15x |
-| 8 | 4.34 | **1.24x** | 1.23x | 1.22x | 0.96x |
-| 16 | 5.22 | 1.05x | **1.19x** | 1.09x | 0.98x |
-| 32 | 6.70 | 0.88x | 0.90x | 0.94x | 0.81x |
-| 64 | 15.06 | 0.83x | 0.91x | 0.92x | 0.77x |
+| 4 | 3.63 ± 0.08 | 2.83 ± 0.11 (1.28x) | 2.72 ± 0.23 (**1.34x**) | 3.11 ± 0.43 (1.17x) | 3.16 ± 0.35 (1.15x) |
+| 8 | 4.34 ± 0.23 | 3.50 ± 0.38 (1.24x) | 3.51 ± 0.38 (1.23x) | 3.57 ± 0.16 (1.22x) | 4.52 ± 0.31 (0.96x) ~ |
+| 16 | 5.22 ± 0.33 | 4.95 ± 0.09 (1.05x) ~ | 4.38 ± 0.19 (**1.19x**) | 4.80 ± 0.23 (1.09x) ~ | 5.32 ± 0.55 (0.98x) ~ |
+| 32 | 6.70 ± 0.35 | 7.59 ± 0.19 (0.88x) | 7.45 ± 0.33 (0.90x) | 7.13 ± 0.14 (0.94x) | 8.23 ± 0.12 (0.81x) |
+| 64 | 15.06 ± 0.12 | 18.14 ± 1.23 (0.83x) | 16.63 ± 0.40 (0.91x) | 16.34 ± 0.19 (0.92x) | 19.63 ± 0.62 (0.77x) |
 
-Run-to-run spread is 2-14% of turn time, largest at 4 factions, where one streamed narrator
-request is two thirds of the turn.
+`~` marks a difference from no speculation within two standard errors (n = 3), not claimed as a
+finding. Differences *between* our k values at 4 and 8 factions are also within noise: k=2
+looking better than k=3 at 4 factions is not established, although it is the expected
+direction, since the third draft position is accepted only 32% of the time there.
 
 **1. The workload-trained head beats generic speculation at every load.** In vLLM, the head's
 mean acceptance length at k=3 (accepted draft tokens + 1 per step) is 2.38 at 4 factions,
@@ -55,12 +63,17 @@ speculation makes each step cost more than it saves. At 64 factions a plain deco
 in decoding: there were no preemptions, KV usage peaked at 87%, and time to first token is
 unchanged. *Why* a speculative step costs ~2.4x even at k=1 is not yet pinned down. vLLM uses
 the same attention backend either way, so the next step is a profile of one step, not a guess.
-*Practical rule: turn speculation on for latency at low concurrency and off under load.*
+As in the companion repo, prompt length grows with faction count (1.35k to 7.9k tokens), so
+this crossover mixes "more concurrent requests" with "longer contexts per request". A
+fixed-prompt control is needed to say which one moves it. *Practical rule: turn speculation
+on for latency at low concurrency and off under load.*
 
-**4. On 8 GB, the draft's memory is part of the price.** At the same 0.8 GPU-memory setting,
-enabling speculation shrinks the KV cache from 1.93 GiB to 1.35-1.56 GiB. vLLM reserves a
-larger CUDA graph pool (and over-estimates it by ~0.2 GiB), and the head adds 0.10 GiB of
-weights plus one layer of KV. A generic small draft model does not fit at all. Qwen2.5-0.5B as a
+**4. On 8 GB, speculation costs KV capacity, and only a very small drafter can afford it.** At
+the same 0.8 GPU-memory setting, the KV cache available to the target shrinks from 1.93 GiB to
+1.35-1.56 GiB when speculation is on. That memory goes to a larger CUDA graph pool, which vLLM
+over-estimates by ~0.2 GiB, and to the drafter. Our head takes only 0.10 GiB of weights plus
+one layer of KV, small enough that the capacity given up never became binding (peak KV usage
+0.87, no preemptions). A generic small draft model does not fit at all. Qwen2.5-0.5B as a
 `draft_model` adds 0.92 GiB of weights and its own 24-layer KV, leaving 0.30 GiB of cache when
 one 16k-token request needs 0.62 GiB, so vLLM refuses to start
 ([config](configs/experiments/spec-smoke-draft.yaml)). We found no usable public EAGLE head for
@@ -151,5 +164,7 @@ speculative-statecraft-trainer python3 -m pytest tests/container`.
   workloads.
 - **Fixed settings:** speculation runs at the same 0.8 memory setting as the baseline, so its
   smaller KV cache counts against it rather than being compensated.
+- **Confounded axis:** faction count moves concurrency and prompt length together (see
+  finding 3).
 - **Open question:** the mechanism behind the 2.4x speculative step cost at high batch is not yet
   explained (finding 3).
