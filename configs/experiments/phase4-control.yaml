@@ -1,0 +1,47 @@
+name: phase4-control
+description: >
+  Control for prompt growth. In phase1-1.5b and phase4-1.5b, faction count moves concurrency
+  and prompt length together (~1.35k to 7.9k tokens). Here every game has the 64-faction world,
+  so every prompt has the 64-faction size, and only the first N factions act (N = faction_counts;
+  the rest pass without a model call). Comparing with phase4-1.5b separates concurrency from
+  context length, for both the scaling curve and the speculation crossover. N = 64 reproduces
+  phase4-1.5b exactly (same seeds, same world), a built-in consistency check.
+model_config_path: configs/models/qwen2.5-1.5b-instruct-bf16.yaml   # in statecraft-serving
+game_config_path: configs/game/default.yaml
+
+server:
+  port: 8000
+  gpu_memory_utilization: 0.8
+  max_model_len: 16384
+  extra_flags: ["--enable-prefix-caching"]
+  startup_timeout_s: 900
+  volumes: ["speculative-statecraft_spec-data:/data"]
+
+agent:
+  faction_max_tokens: 160
+  narrator_max_tokens: 200
+  temperature: 0.7
+  guided_decoding: true
+  faction_priority: null
+  narrator_priority: null
+  narrator: sequential
+
+run:
+  faction_counts: [4, 8, 16, 32, 64]
+  repeats: 3
+  seeds: [0, 1, 2]          # reserved eval seeds: never in the draft head's training data
+  turns: 6
+  warmup_turns: 1
+  server_warmup_factions: 8
+  server_warmup_turns: 2
+  server_warmup_seed: 1000
+  request_timeout_s: 600
+  metrics_interval_s: 1.0
+  stall_timeout_s: 180
+  world_factions: 64        # fixed world (and prompt) size; faction_counts = acting factions
+
+# Our head: 6-epoch EAGLE-1 (offline walk MAL 2.72 at k=3 on held-out games).
+variants:
+  - name: baseline
+  - name: eagle1-k2
+    extra_flags: ["--speculative-config", '{"method": "eagle", "model": "/data/heads/eagle1-qwen2.5-1.5b-6ep-20261004T022949Z", "num_speculative_tokens": 2}']
