@@ -36,6 +36,15 @@ finding. Differences *between* our k values at 4 and 8 factions are also within 
 looking better than k=3 at 4 factions is not established, although it is the expected
 direction, since the third draft position is accepted only 32% of the time there.
 
+**The narrator's token cap does not drive the speedups.** The streamed narrator hits its cap
+in 0-100% of turns depending on config, so the comparisons were recomputed on the
+faction-decision phase alone (narrator excluded):
+- *Our head:* k=2 still wins up to 16 agents (1.50 / 1.17 / 1.09x at 4 / 8 / 16) and loses
+  from 32 (0.89x), so the crossover is unchanged.
+- *N-gram:* its only win (1.15x at 4 factions) disappears (0.94x). All of it came from the
+  narrator, which reuses phrasing from the earlier narrations in its prompt (2.6% of
+  narrations are verbatim copies), exactly what prompt lookup catches.
+
 **1. The workload-trained head beats generic speculation at every load.** In vLLM, the head's
 mean acceptance length at k=3 (accepted draft tokens + 1 per step) is 2.38 at 4 factions,
 rising to 2.89 at 32 and 64. N-gram falls from 2.32 to 2.17. Bigger games are mostly faction
