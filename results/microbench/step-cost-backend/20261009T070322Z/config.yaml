@@ -1,0 +1,83 @@
+name: step-cost-backend
+description: 'Follow-up to step-cost-short: verifying 2 tokens per request (n-gram
+  k=1) adds ~44 ms per step at batch 32 on ~4.3k-token prompts but only ~7 ms on ~150-token
+  prompts, so the extra cost is attention over the context. Same test under each attention
+  backend: if the extra cost changes with the backend, it is the backend''s multi-query
+  (verification) decode path.
+
+  '
+model_config_path: configs/models/qwen2.5-1.5b-instruct-bf16.yaml
+game_turn: data/collect/qwen2.5-1.5b/run2/games/n32_s109.jsonl#3
+max_message_chars: 200
+temperature: 0.7
+seed: 0
+request_timeout_s: 600.0
+server:
+  port: 8000
+  gpu_memory_utilization: 0.7
+  max_model_len: 8192
+  extra_flags:
+  - --enable-prefix-caching
+  - --compilation-config
+  - '{"max_cudagraph_capture_size": 128}'
+  startup_timeout_s: 900.0
+  volumes:
+  - speculative-statecraft_spec-data:/data
+phases:
+- kind: decode
+  name: decode-long
+  batch_sizes:
+  - 1
+  - 16
+  - 32
+  guided: false
+  max_tokens: 64
+  fixed_length: true
+  repeats: 2
+  prompts: game_turn
+servers:
+- name: none-flash
+  extra_flags:
+  - --attention-backend
+  - FLASH_ATTN
+  phases:
+  - decode-long
+- name: ngram-k1-flash
+  extra_flags:
+  - --attention-backend
+  - FLASH_ATTN
+  - --speculative-config
+  - '{"method": "ngram", "num_speculative_tokens": 1, "prompt_lookup_min": 2, "prompt_lookup_max":
+    5}'
+  phases:
+  - decode-long
+- name: none-flashinfer
+  extra_flags:
+  - --attention-backend
+  - FLASHINFER
+  phases:
+  - decode-long
+- name: ngram-k1-flashinfer
+  extra_flags:
+  - --attention-backend
+  - FLASHINFER
+  - --speculative-config
+  - '{"method": "ngram", "num_speculative_tokens": 1, "prompt_lookup_min": 2, "prompt_lookup_max":
+    5}'
+  phases:
+  - decode-long
+- name: none-triton
+  extra_flags:
+  - --attention-backend
+  - TRITON_ATTN
+  phases:
+  - decode-long
+- name: ngram-k1-triton
+  extra_flags:
+  - --attention-backend
+  - TRITON_ATTN
+  - --speculative-config
+  - '{"method": "ngram", "num_speculative_tokens": 1, "prompt_lookup_min": 2, "prompt_lookup_max":
+    5}'
+  phases:
+  - decode-long

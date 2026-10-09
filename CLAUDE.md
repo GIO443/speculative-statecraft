@@ -167,7 +167,21 @@ becomes compute saturated) and explain why. Every result must be explained by me
   (agents x prompt tokens): speculation pays below ~65k, loses above ~130k; baseline TPOT flat
   ~18-23 ms to ~65k, ~125-134 ms at 525k (`analysis.in_flight`, in_flight.png). Session drift:
   the 64-agent case (identical game) was 6-7% faster than in the phase4 sweep; compare ratios.
-- Open: why a speculative step is ~2.4x a plain decode step at batch ~30 with 4-8k contexts.
+- **Step cost explained (2026-10-09, `spec/microbench.py`, results/microbench/step-cost*).**
+  Micro-benchmark replays held-out 32-faction turn (n32_s109#3, ~4.3k-token prompts) at fixed
+  batch; step time = median gap between streamed chunks while all B decode (vLLM's
+  iteration "elapsed" is only the scheduler call under async scheduling). Ran at util 0.70,
+  max_model_len 8192, cudagraph capture <= 128 (only ~5.8 GiB VRAM free), all servers alike.
+  Batch 32: plain 26.3 ms; n-gram k=1 ~= random head k=1 ~= 67-69 ms (not draft compute);
+  guided ~= unguided (not grammar); FULL CUDA graphs (no eager fallback); ~150-token prompts:
+  only +6.9 ms (per-request overhead), so +38 ms is attention over context with 2 query tokens.
+  Backend: verify/plain = 2.74x FLASH_ATTN (default), 1.46x FLASHINFER, 1.25x TRITON_ATTN.
+  Generalization (k=3 MAL): game 3.05 head / 1.89 ngram; ticket JSON 1.34 / 2.15; prose
+  1.20 / 1.22.
+- Narrator-cap sensitivity: decide-phase-only speedups keep the crossover; n-gram's 4-faction
+  win was entirely the narrator.
+- Next candidate: rerun phase4 sweep with `--attention-backend FLASHINFER` (or TRITON_ATTN)
+  for baseline and eagle k1-3, at util 0.8 (needs ~6.55 GiB free VRAM).
   Needs a controlled micro-benchmark (fixed batch x context, baseline vs eagle k1) and a profile
   of one step, not guessing. Proposed as the next step. (`--limit 2` first; check
   prompt/completion token-count mismatches and stored size), then `spec/draft_head.py`.

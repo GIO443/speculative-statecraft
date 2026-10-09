@@ -10,7 +10,7 @@ vLLM on one 8 GB laptop GPU. We collect the target model's own outputs, train an
 head on them (51.5M parameters, under an hour on the same laptop), and compare it with no
 speculation and with n-gram speculation across faction counts. The head's serving acceptance
 is predicted offline before it is served, and the prediction lands within 3% of what vLLM
-measures at every load (finding 6).
+measures at every load (finding 7).
 
 Companion repo: [statecraft-serving](https://github.com/GIO443/statecraft-serving) (the
 simulation, the benchmark harness, and the non-speculative serving results).
@@ -45,11 +45,24 @@ faction-decision phase alone (narrator excluded):
   narrator, which reuses phrasing from the earlier narrations in its prompt (2.6% of
   narrations are verbatim copies), exactly what prompt lookup catches.
 
-**1. The workload-trained head beats generic speculation at every load.** In vLLM, the head's
-mean acceptance length at k=3 (accepted draft tokens + 1 per step) is 2.38 at 4 factions,
-rising to 2.89 at 32 and 64. N-gram falls from 2.32 to 2.17. Bigger games are mostly faction
-JSON, which the head predicts very well. N-gram can only copy spans that already appear in
-the prompt, and most JSON values and all message text are new.
+**1. The workload-trained head beats generic speculation on its workload, and only there.**
+In vLLM, the head's mean acceptance length at k=3 (accepted draft tokens + 1 per step) is 2.38
+at 4 factions, rising to 2.89 at 32 and 64. N-gram falls from 2.32 to 2.17. Bigger games are
+mostly faction JSON, which the head predicts very well. N-gram can only copy spans that already
+appear in the prompt, and most JSON values and all message text are new.
+
+The same head served on other request mixes shows the advantage is learned, not generic
+(k=3, mean acceptance length, [micro-benchmark](results/microbench/step-cost/20261009T063640Z/summary.md)):
+
+| Workload | our head | n-gram |
+|---|---|---|
+| The game (held-out turn) | **3.05** | 1.89 |
+| A different JSON schema (support-ticket extraction) | 1.34 | **2.15** |
+| Free prose | 1.20 | 1.22 |
+
+On another schema the head falls to near-prose levels and loses to n-gram, which copies names
+and order numbers straight from the ticket. *A workload-trained drafter is a bet on the
+workload staying the same.*
 
 **2. What the head can predict depends on the output region.** Offline, on held-out games:
 
@@ -63,30 +76,61 @@ Structure the target has to emit is nearly free to draft; free text costs the he
 it costs any small drafter. *Workloads that are mostly structured output gain the most.*
 
 **3. Speculation stops paying at ~65-130k tokens of context in flight (here, 16-32 agents).**
-Below that, decode is
-memory-bandwidth bound: each step streams the 3 GB of weights to produce one token per request,
-and the GPU's compute sits mostly idle. Verifying 2-4 tokens per step uses that idle compute,
-so per-token latency falls (17.8 ms to 9.7 ms at 4 factions with k=3). At 32 to 64 the step
-is already expensive, because every sequence's 4-8k-token context is read each step. There,
-speculation makes each step cost more than it saves. At 64 factions a plain decode step takes
-~134 ms; with speculation on it takes ~326 ms at k=1 and ~384 ms at k=3. The loss is entirely
-in decoding: there were no preemptions, KV usage peaked at 87%, and time to first token is
-unchanged. *Why* a speculative step costs ~2.4x even at k=1 is not yet pinned down. vLLM uses
-the same attention backend either way, so the next step is a profile of one step, not a guess.
+Below that, decode is memory-bandwidth bound: each step streams the 3 GB of weights to produce
+one token per request, and the GPU's compute sits mostly idle. Verifying 2-4 tokens per step
+uses that idle compute, so per-token latency falls (17.8 ms to 9.7 ms at 4 factions with
+k=3). The loss at higher load is entirely in decoding: there were no preemptions, KV usage
+peaked at 87%, and time to first token is unchanged. At 64 factions a plain decode step takes
+~134 ms; with speculation on it takes ~326 ms at k=1 and ~384 ms at k=3.
+
 Prompt length grows with faction count (1.35k to 7.9k tokens), so a control run fixed every
 prompt at ~8k tokens (64-faction world) and varied only how many factions act. With long
 prompts everywhere, the crossover moves down, from between 16 and 32 agents to between 8 and
 16. Both runs fall on one curve when plotted against **context in flight** (agents x prompt
-tokens). Speculation pays below ~65k tokens in flight and loses above ~130k. That is the
-point where reading every sequence's KV, rather than the weights, starts to dominate each
-decode step (right panel: baseline per-token latency on the same axis).
+tokens): speculation pays below ~65k tokens in flight and loses above ~130k (right panel:
+baseline per-token latency on the same axis).
 
 ![Speedup and per-token latency vs context in flight](results/phase4-control/20261006T222655Z/in_flight.png)
 
-*Practical rule: gate speculation on agents x context (KV bytes per decode step), not on
-request count alone.*
+**4. The crossover is mostly a property of the attention backend, not of compute
+saturation.** A controlled micro-benchmark ([spec/microbench.py](spec/microbench.py)) isolates
+one decode step. It replays a held-out 32-faction turn (~4.3k-token prompts) at fixed batch
+sizes and times steps from the streamed output. Each candidate cause was tested directly:
 
-**4. On 8 GB, speculation costs KV capacity, and only a very small drafter can afford it.** At
+| Candidate cause of the ~2.5x step cost | Test | Verdict |
+|---|---|---|
+| Draft model compute | n-gram k=1 (drafts on CPU) vs always-rejected random head | n-gram costs the same (66.9 vs 68.1 ms): **not draft compute** |
+| JSON grammar checking draft tokens | guided vs unguided | 69.6 vs 66.9 ms with n-gram: **not the grammar** |
+| Spec path falling back to eager mode | `--cudagraph-metrics` | decode steps run as FULL CUDA graphs: **no fallback** |
+| Per-request overhead (sampling, rejection) | same batch with ~150-token prompts | only +6.9 ms at batch 32 |
+| Attention over the context while verifying | ~4.3k- vs ~150-token prompts | +45 ms vs +7 ms: **scales with context** |
+
+At batch 32, a verifying step on vLLM 0.30's default FlashAttention backend breaks down as:
+- *Plain decode step:* 26.3 ms.
+- *Per-request speculation overhead:* +6.9 ms.
+- *Attention over the context with 2 query tokens per request:* +38 ms.
+- *Draft head forward:* +2-4 ms.
+
+The attention term should be small, since 2 queries read the same KV as 1, and on other
+backends it is. Same test (batch 32, n-gram k=1):
+
+| Attention backend | plain step | verifying step | ratio |
+|---|---|---|---|
+| FlashAttention (vLLM 0.30 default, used in every sweep) | 24.5 ms | 67.2 ms | **2.74x** |
+| FlashInfer | 20.3 ms | 29.8 ms | 1.46x |
+| Triton | 23.1 ms | 28.9 ms | 1.25x |
+
+So most of the high-load penalty is the default backend's multi-query decode path, which gets
+more expensive as context grows. FlashInfer is also the fastest backend without speculation
+here. A sweep with FlashInfer or Triton should move the crossover to much higher load; that
+rerun is the next experiment. The micro-benchmark ran at 0.70 GPU-memory utilization,
+`max_model_len` 8192 and CUDA graphs up to 128 tokens (all servers alike), because only ~5.8
+GiB of VRAM was free that day ([configs](configs/microbench/)).
+
+*Practical rule: before concluding that speculation does not pay under load, check the
+attention backend's verification path.*
+
+**5. On 8 GB, speculation costs KV capacity, and only a very small drafter can afford it.** At
 the same 0.8 GPU-memory setting, the KV cache available to the target shrinks from 1.93 GiB to
 1.35-1.56 GiB when speculation is on. That memory goes to a larger CUDA graph pool, which vLLM
 over-estimates by ~0.2 GiB, and to the drafter. Our head takes only 0.10 GiB of weights plus
@@ -98,13 +142,13 @@ one 16k-token request needs 0.62 GiB, so vLLM refuses to start
 Qwen2.5-1.5B-Instruct, so a 1-layer head trained in-house is the only model-based drafter that
 fits.
 
-**5. Guided decoding makes the model emit token sequences that re-tokenizing will not
+**6. Guided decoding makes the model emit token sequences that re-tokenizing will not
 reproduce.** Under the JSON grammar the model often emits `"},"` as two tokens, where the
 tokenizer would use one. 15% of collected requests contain such a split. Training on
 re-tokenized text would teach the head token sequences the model never produces, so the data
 is collected with vLLM's sampled token ids (`return_token_ids`) instead.
 
-**6. Measure acceptance the way vLLM drafts, or the offline number misleads.** Averaging over
+**7. Measure acceptance the way vLLM drafts, or the offline number misleads.** Averaging over
 every position overstates serving acceptance (3.02 for the final head, against 2.72 per draft):
 a draft only starts where the previous one ended, so long accepted JSON runs skip the easy
 positions. An offline metric that walks each sequence the same way predicts vLLM's measured
@@ -149,6 +193,10 @@ compared in minutes without a serving sweep.
 - `spec/export.py`: `config.json` + `model.safetensors` with only the head's own weights. vLLM
   shares the target's embedding and LM head.
 - `analysis/phase4.py`: speedup, per-faction-count acceptance from vLLM counters, KV size, plots.
+- `spec/microbench.py`: replays one recorded game turn at fixed batch sizes against several
+  server configs and times decode steps from the streamed output: the median gap between
+  chunks while every request is decoding. vLLM's own per-iteration time only covers the
+  scheduler call under async scheduling. Also measures acceptance on other workloads.
 - The serving sweep reuses statecraft-serving's harness (same container lifecycle, metrics and
   WSL2 caveat), so the baseline is directly comparable with Phase 1 there.
 
@@ -184,5 +232,8 @@ speculative-statecraft-trainer python3 -m pytest tests/container`.
   smaller KV cache counts against it rather than being compensated.
 - **Session drift:** the same configuration rerun in a later session was 6-7% faster, so
   speedups are always within-run ratios.
-- **Open question:** the mechanism behind the 2.4x speculative step cost at high batch is not yet
-  explained (finding 3).
+- **Backend not yet swept:** the sweeps used vLLM 0.30's default FlashAttention backend, whose
+  verification path causes most of the high-load penalty (finding 4). A sweep with FlashInfer
+  or Triton has not been run yet.
+- **Micro-benchmark settings:** it ran at reduced memory settings (finding 4), so its absolute
+  step times are not comparable with the sweeps; only its within-run comparisons are used.
