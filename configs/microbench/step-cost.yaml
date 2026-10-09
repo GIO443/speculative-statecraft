@@ -16,11 +16,14 @@ request_timeout_s: 600
 
 server:
   port: 8000
-  # 0.8 in the sweeps; 0.68 here because only ~5.6 GiB was free (other apps). Servers are only
-  # compared with each other in this run, and step time does not depend on KV pool size.
-  gpu_memory_utilization: 0.68
-  max_model_len: 16384
-  extra_flags: ["--enable-prefix-caching"]
+  # The sweeps use util 0.8, max_model_len 16384 and the default CUDA graph sizes (up to 512).
+  # Only ~5.8 GiB of VRAM was free (other apps), so to fit 32 concurrent ~4.3k-token requests
+  # with speculation on, every server here (baseline included) uses: util 0.70, max_model_len
+  # 8192 (longest request ~4.5k), and CUDA graphs up to 128 tokens (= batch 32 x (k=3 + 1)).
+  # Servers are only compared with each other in this run.
+  gpu_memory_utilization: 0.70
+  max_model_len: 8192
+  extra_flags: ["--enable-prefix-caching", "--compilation-config", '{"max_cudagraph_capture_size": 128}']
   startup_timeout_s: 900
   volumes: ["speculative-statecraft_spec-data:/data"]
 
