@@ -9,32 +9,12 @@ from spec.microbench import (
     MicrobenchConfig,
     decode_step_stats,
     game_turn_messages,
-    parse_steps,
     prose_messages,
     summarize,
     ticket_messages,
 )
 
 CONFIG = REPO_ROOT / "configs" / "microbench" / "step-cost.yaml"
-
-
-def _line(i: int, ctx_req: int, ctx_tok: int, gen_req: int, gen_tok: int, ms: float) -> str:
-    return (
-        f"(EngineCore pid=1) INFO 10-07 10:00:00 [loggers.py:190] Iteration({i}): "
-        f"{ctx_req} context requests, {ctx_tok} context tokens, {gen_req} generation requests, "
-        f"{gen_tok} generation tokens, iteration elapsed time: {ms:.2f} ms, "
-        "GPU KV cache usage: 3.0%"
-    )
-
-
-LOG = "\n".join(
-    [
-        _line(7, 2, 900, 0, 0, 40.1),
-        _line(8, 0, 0, 2, 4, 12.5),
-        _line(9, 0, 0, 2, 4, 13.5),
-        _line(10, 0, 0, 1, 2, 9.0),
-    ]
-)
 
 
 def test_config_loads() -> None:
@@ -45,12 +25,15 @@ def test_config_loads() -> None:
     assert all(not (p.guided and p.fixed_length) for p in cfg.phases if p.kind == "decode")
 
 
-def test_parse_steps_and_pure_decode_filter() -> None:
-    steps = parse_steps(LOG)
-    assert [s["iteration"] for s in steps] == [7, 8, 9, 10]
-    stats = decode_step_stats(steps, 2)
-    assert stats == {"steps": 2, "step_ms_median": 13.0, "gen_tokens_per_step": 4.0}
-    assert decode_step_stats(steps, 64) is None
+def test_step_time_from_chunk_gaps() -> None:
+    # Request A streams every 10 ms from t=0; B's first chunk arrives at t=0.05 (later prefill)
+    # and it finishes first at t=0.15. Only gaps inside [0.05, 0.15] count: all 10 ms.
+    a = [i * 0.01 for i in range(31)]
+    b = [0.05 + i * 0.01 for i in range(11)]
+    stats = decode_step_stats([a, b])
+    assert stats is not None and abs(stats["step_ms_median"] - 10.0) < 1e-6
+    assert stats["gaps"] == 20
+    assert decode_step_stats([[0.0], a]) is None
 
 
 def test_request_sources() -> None:
@@ -67,7 +50,7 @@ def test_game_turn_messages_share_prefix() -> None:
     if not path.exists():
         pytest.skip("collected data not present")
     msgs = game_turn_messages(cfg.game_turn)
-    assert len(msgs) == 64
+    assert len(msgs) == 32
     assert len({m[0]["content"] for m in msgs}) == 1  # identical system (shared) section
 
 

@@ -4,20 +4,22 @@ trained head transfer to other workloads?
     uv run python -m spec.microbench configs/microbench/<name>.yaml [--server NAME]
 
 For each server config (no speculation, n-gram, random head, trained head ...) one vLLM
-container is started with `--enable-logging-iteration-details` (per-step elapsed time and
-token counts) and `--cudagraph-metrics` (CUDA graph mode actually used per step). Then:
+container is started with `--cudagraph-metrics` (CUDA graph mode actually used per step).
+Then:
 
 - `decode` phases send B real faction prompts from one recorded game turn at once (fixed
-  context, shared prefix, as in the game), with and without the JSON grammar. Step time is
-  read from the iteration log: the median over pure-decode steps (no prefill tokens) that
-  carry exactly B requests. Differences between servers isolate verification cost (n-gram:
-  extra tokens, almost no draft compute), draft cost (random head: always rejected), and
-  grammar cost (guided on vs off).
+  context, shared prefix, as in the game), with and without the JSON grammar. vLLM streams
+  one chunk per request per engine step, so the step time is the median gap between
+  consecutive chunks while all B requests are decoding (after the last first token, before
+  the first finish). vLLM's own per-iteration "elapsed time" cannot be used: with async
+  scheduling it times only the scheduler call. Differences between servers isolate
+  verification cost (n-gram: extra tokens, almost no draft compute), draft cost (random head:
+  always rejected) and grammar cost (guided on vs off).
 - `workload` phases send other request mixes (the game turn, a different JSON schema, free
   prose) and read vLLM's speculative acceptance from /metrics deltas.
 
-Writes results/microbench/<name>/<stamp>/<server>/: env.json, vllm.log, steps.jsonl,
-phases.jsonl, and a summary.md for the whole run.
+Writes results/microbench/<name>/<stamp>/<server>/: env.json, vllm.log, phases.jsonl, and a
+summary.md for the whole run.
 """
 
 from __future__ import annotations
@@ -26,10 +28,10 @@ import argparse
 import asyncio
 import json
 import random
-import re
 import statistics as st
 import time
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
 
@@ -45,12 +47,7 @@ from sim.actions import response_json_schema
 
 from spec.collect import REPO_ROOT
 
-ITERATION = re.compile(
-    r"Iteration\((\d+)\): (\d+) context requests, (\d+) context tokens, "
-    r"(\d+) generation requests, (\d+) generation tokens, "
-    r"iteration elapsed time: ([\d.]+) ms"
-)
-DIAG_FLAGS = ["--enable-logging-iteration-details", "--cudagraph-metrics"]
+DIAG_FLAGS = ["--cudagraph-metrics"]
 
 
 class _Strict(BaseModel):
@@ -181,30 +178,21 @@ def prose_messages(n: int, rng: random.Random) -> list[list[Message]]:
 # --- measurement --------------------------------------------------------------------------
 
 
-def parse_steps(log: str) -> list[dict[str, float]]:
-    return [
-        {
-            "iteration": int(m[1]),
-            "ctx_requests": int(m[2]),
-            "ctx_tokens": int(m[3]),
-            "gen_requests": int(m[4]),
-            "gen_tokens": int(m[5]),
-            "elapsed_ms": float(m[6]),
-        }
-        for m in ITERATION.finditer(log)
-    ]
+def decode_step_stats(chunk_times: list[list[float]]) -> dict[str, Any] | None:
+    """Median gap between consecutive streamed chunks while every request is decoding.
 
-
-def decode_step_stats(steps: list[dict[str, float]], batch: int) -> dict[str, Any] | None:
-    """Pure-decode steps (no prefill) that carry exactly `batch` requests."""
-    pure = [s for s in steps if s["ctx_tokens"] == 0 and s["gen_requests"] == batch]
-    if not pure:
+    chunk_times[i] holds request i's chunk arrival times. The window starts at the last
+    request's first chunk (all prefills done) and ends at the first request's last chunk
+    (nobody has finished), so every gap inside it is a step with exactly B requests.
+    """
+    if not chunk_times or any(len(t) < 2 for t in chunk_times):
         return None
-    return {
-        "steps": len(pure),
-        "step_ms_median": st.median(s["elapsed_ms"] for s in pure),
-        "gen_tokens_per_step": st.mean(s["gen_tokens"] for s in pure),
-    }
+    lo = max(t[0] for t in chunk_times)
+    hi = min(t[-1] for t in chunk_times)
+    gaps = [b - a for t in chunk_times for a, b in pairwise(t) if lo <= a and b <= hi]
+    if len(gaps) < 3:
+        return None
+    return {"gaps": len(gaps), "step_ms_median": st.median(gaps) * 1000}
 
 
 SPEC = {
@@ -237,6 +225,7 @@ async def run_requests(
     sem = asyncio.Semaphore(concurrency)
 
     async def one(i: int, msgs: list[Message]) -> dict[str, Any]:
+        times: list[float] = []
         req = ChatRequest(
             messages=msgs,
             max_tokens=max_tokens,
@@ -247,8 +236,13 @@ async def run_requests(
             ignore_eos=fixed_length,
         )
         async with sem:
-            c = await client.chat(req)
-        return {"tokens": c.completion_tokens, "latency_s": c.latency_s, "error": c.error}
+            c = await client.chat(req, on_token=lambda _: times.append(time.perf_counter()))
+        return {
+            "tokens": c.completion_tokens,
+            "latency_s": c.latency_s,
+            "error": c.error,
+            "chunk_times": times,
+        }
 
     return list(await asyncio.gather(*(one(i, m) for i, m in enumerate(messages))))
 
@@ -273,27 +267,27 @@ async def run_server_phases(
                     if b > len(game):
                         raise ValueError(f"batch {b} > {len(game)} prompts in the game turn")
                     for r in range(p.repeats):
-                        mark = len(server.logs())
+                        before = await spec_counters(cfg.server.root_url)
                         t0 = time.perf_counter()
                         res = await run_requests(
                             client, game[:b], p.max_tokens, cfg.temperature, schema,
                             p.fixed_length, b, cfg.seed + 1000 * r,
                         )  # fmt: skip
                         wall = time.perf_counter() - t0
-                        steps = parse_steps(server.logs()[mark:])
+                        after = await spec_counters(cfg.server.root_url)
+                        drafts = after["drafts"] - before["drafts"]
+                        accepted = after["accepted"] - before["accepted"]
                         rows.append(
                             {
                                 "phase": name, "kind": "decode", "guided": p.guided,
                                 "batch": b, "repeat": r, "wall_s": wall,
                                 "errors": sum(x["error"] is not None for x in res),
-                                "decode": decode_step_stats(steps, b),
+                                "decode": decode_step_stats([x["chunk_times"] for x in res]),
+                                "output_tokens": sum(x["tokens"] or 0 for x in res),
+                                "chunks": sum(len(x["chunk_times"]) for x in res),
+                                "mean_acceptance_length": 1 + accepted / drafts if drafts else None,
                             }
                         )  # fmt: skip
-                        with (out / "steps.jsonl").open("a", encoding="utf-8") as f:
-                            for s in steps:
-                                f.write(
-                                    json.dumps({"phase": name, "batch": b, "repeat": r, **s}) + "\n"
-                                )
             else:
                 if p.source == "game_turn":
                     msgs = (game * (p.requests // len(game) + 1))[: p.requests]
