@@ -71,6 +71,9 @@ class DecodePhase(_Strict):
     # only steps that still carry all B requests.
     fixed_length: bool
     repeats: int
+    # game_turn: ~4.3k-token faction prompts; ticket_json: ~150-token prompts. Same batch, very
+    # different context: separates per-request overhead from per-context-token attention cost.
+    prompts: Literal["game_turn", "ticket_json"] = "game_turn"
 
 
 class WorkloadPhase(_Strict):
@@ -261,16 +264,20 @@ async def run_server_phases(
         await run_requests(client, game[:4], 16, cfg.temperature, None, True, 4, cfg.seed)
         for name in variant.phases:
             p = phases[name]
+            first = len(rows)
             if isinstance(p, DecodePhase):
                 schema = response_json_schema(cfg.max_message_chars) if p.guided else None
+                pool = game
+                if p.prompts == "ticket_json":
+                    pool = ticket_messages(max(p.batch_sizes), random.Random(cfg.seed))
                 for b in p.batch_sizes:
-                    if b > len(game):
-                        raise ValueError(f"batch {b} > {len(game)} prompts in the game turn")
+                    if b > len(pool):
+                        raise ValueError(f"batch {b} > {len(pool)} prompts available")
                     for r in range(p.repeats):
                         before = await spec_counters(cfg.server.root_url)
                         t0 = time.perf_counter()
                         res = await run_requests(
-                            client, game[:b], p.max_tokens, cfg.temperature, schema,
+                            client, pool[:b], p.max_tokens, cfg.temperature, schema,
                             p.fixed_length, b, cfg.seed + 1000 * r,
                         )  # fmt: skip
                         wall = time.perf_counter() - t0
@@ -316,7 +323,8 @@ async def run_server_phases(
                     }
                 )  # fmt: skip
             with (out / "phases.jsonl").open("a", encoding="utf-8") as f:
-                f.write(json.dumps(rows[-1]) + "\n")
+                for row in rows[first:]:
+                    f.write(json.dumps(row) + "\n")
             print(f"  {variant.name} {name}: {json.dumps(rows[-1])[:200]}", flush=True)
     finally:
         await client.aclose()

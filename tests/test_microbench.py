@@ -1,4 +1,5 @@
 import random
+from pathlib import Path
 
 import pytest
 import yaml
@@ -15,10 +16,12 @@ from spec.microbench import (
 )
 
 CONFIG = REPO_ROOT / "configs" / "microbench" / "step-cost.yaml"
+CONFIGS = sorted((REPO_ROOT / "configs" / "microbench").glob("*.yaml"))
 
 
-def test_config_loads() -> None:
-    cfg = MicrobenchConfig.model_validate(yaml.safe_load(CONFIG.read_text("utf-8")))
+@pytest.mark.parametrize("path", CONFIGS, ids=lambda p: p.name)
+def test_config_loads(path: Path) -> None:
+    cfg = MicrobenchConfig.model_validate(yaml.safe_load(path.read_text("utf-8")))
     phase_names = {p.name for p in cfg.phases}
     assert all(set(s.phases) <= phase_names for s in cfg.servers)
     # A closed JSON grammar cannot be forced to keep going.

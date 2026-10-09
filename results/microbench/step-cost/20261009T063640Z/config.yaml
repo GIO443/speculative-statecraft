@@ -1,0 +1,118 @@
+name: step-cost
+description: 'Why does a speculative decode step cost ~2.4x a plain one at high load,
+  and does the trained head transfer beyond the game? Same pinned vLLM, util 0.8 and
+  prefix caching as the sweeps. Decode phases replay the 32 faction prompts (~4.3k
+  tokens, shared prefix) of one held-out game turn at batch 1-32 and read per-step
+  time from vLLM''s iteration log. Servers: no speculation; n-gram k=1 (verification
+  with almost no draft compute); the untrained random head k=1 (always rejected: full
+  draft cost, zero benefit); the trained head k=1 and k=3. Workload phases compare
+  acceptance on the game, a different JSON schema, and free prose.
+
+  '
+model_config_path: configs/models/qwen2.5-1.5b-instruct-bf16.yaml
+game_turn: data/collect/qwen2.5-1.5b/run2/games/n32_s109.jsonl#3
+max_message_chars: 200
+temperature: 0.7
+seed: 0
+request_timeout_s: 600.0
+server:
+  port: 8000
+  gpu_memory_utilization: 0.7
+  max_model_len: 8192
+  extra_flags:
+  - --enable-prefix-caching
+  - --compilation-config
+  - '{"max_cudagraph_capture_size": 128}'
+  startup_timeout_s: 900.0
+  volumes:
+  - speculative-statecraft_spec-data:/data
+phases:
+- kind: decode
+  name: decode-guided
+  batch_sizes:
+  - 1
+  - 4
+  - 16
+  - 32
+  guided: true
+  max_tokens: 160
+  fixed_length: false
+  repeats: 2
+- kind: decode
+  name: decode-free
+  batch_sizes:
+  - 1
+  - 4
+  - 16
+  - 32
+  guided: false
+  max_tokens: 64
+  fixed_length: true
+  repeats: 2
+- kind: workload
+  name: game
+  source: game_turn
+  requests: 32
+  max_tokens: 160
+  concurrency: 32
+- kind: workload
+  name: tickets
+  source: ticket_json
+  requests: 64
+  max_tokens: 160
+  concurrency: 16
+- kind: workload
+  name: prose
+  source: prose
+  requests: 32
+  max_tokens: 200
+  concurrency: 16
+servers:
+- name: none
+  extra_flags: []
+  phases:
+  - decode-guided
+  - decode-free
+- name: ngram-k1
+  extra_flags:
+  - --speculative-config
+  - '{"method": "ngram", "num_speculative_tokens": 1, "prompt_lookup_min": 2, "prompt_lookup_max":
+    5}'
+  phases:
+  - decode-guided
+  - decode-free
+- name: random-k1
+  extra_flags:
+  - --speculative-config
+  - '{"method": "eagle", "model": "/data/heads/random", "num_speculative_tokens":
+    1}'
+  phases:
+  - decode-guided
+  - decode-free
+- name: eagle-k1
+  extra_flags:
+  - --speculative-config
+  - '{"method": "eagle", "model": "/data/heads/eagle1-qwen2.5-1.5b-6ep-20261004T022949Z",
+    "num_speculative_tokens": 1}'
+  phases:
+  - decode-guided
+  - decode-free
+- name: eagle-k3
+  extra_flags:
+  - --speculative-config
+  - '{"method": "eagle", "model": "/data/heads/eagle1-qwen2.5-1.5b-6ep-20261004T022949Z",
+    "num_speculative_tokens": 3}'
+  phases:
+  - decode-guided
+  - game
+  - tickets
+  - prose
+- name: ngram-k3
+  extra_flags:
+  - --speculative-config
+  - '{"method": "ngram", "num_speculative_tokens": 3, "prompt_lookup_min": 2, "prompt_lookup_max":
+    5}'
+  phases:
+  - game
+  - tickets
+  - prose

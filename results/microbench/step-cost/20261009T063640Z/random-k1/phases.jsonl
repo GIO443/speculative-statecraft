@@ -1,0 +1,2 @@
+{"phase": "decode-guided", "kind": "decode", "guided": true, "batch": 32, "repeat": 1, "wall_s": 4.356355499941856, "errors": 0, "decode": {"gaps": 681, "step_ms_median": 68.50520009174943}, "output_tokens": 1795, "chunks": 1763, "mean_acceptance_length": 1.0}
+{"phase": "decode-free", "kind": "decode", "guided": false, "batch": 32, "repeat": 1, "wall_s": 4.621496199979447, "errors": 0, "decode": {"gaps": 1828, "step_ms_median": 68.44914995599538}, "output_tokens": 2048, "chunks": 2043, "mean_acceptance_length": 1.0}

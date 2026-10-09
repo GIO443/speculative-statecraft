@@ -27,3 +27,4 @@ checkpoints/
 .idea/
 Thumbs.db
 .DS_Store
+!results/microbench/**/phases.jsonl
